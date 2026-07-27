@@ -17,6 +17,7 @@
       --border: #2a2a3a;
       --message-out: #00cc66;
       --message-in: #1e1e2e;
+      --notification-dot: #ff4444;
     }
 
     * {
@@ -149,6 +150,7 @@
       align-items: center;
       gap: 0.5rem;
       cursor: pointer;
+      position: relative;
     }
 
     .user-badge .avatar {
@@ -177,6 +179,22 @@
       border-radius: 50%;
       background: var(--accent-green);
       box-shadow: 0 0 5px var(--accent-green);
+    }
+
+    .notification-badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      background: var(--notification-dot);
+      color: white;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: bold;
     }
 
     .main-content {
@@ -237,6 +255,7 @@
       cursor: pointer;
       transition: 0.3s;
       border: 1px solid var(--border);
+      position: relative;
     }
 
     .user-item:hover {
@@ -302,6 +321,22 @@
     .user-item .offline-status .status-dot {
       background: var(--text-secondary);
       box-shadow: none;
+    }
+
+    .user-item .notification-badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      background: var(--notification-dot);
+      color: white;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: bold;
     }
 
     /* === SCREEN 3: PROFILE === */
@@ -516,6 +551,16 @@
       max-width: 100%;
       border-radius: 8px;
       margin-top: 0.5rem;
+      cursor: pointer;
+      transition: filter 0.3s;
+    }
+
+    .message img.blur {
+      filter: blur(10px);
+    }
+
+    .message img.blur:hover {
+      filter: blur(0);
     }
 
     .message .file-info {
@@ -681,6 +726,7 @@
         <div class="user-badge" onclick="openProfile()">
           <div class="avatar" id="current-user-avatar">U</div>
           <div class="status"></div>
+          <div class="notification-badge" id="header-notification" style="display: none;">0</div>
         </div>
       </div>
     </div>
@@ -732,7 +778,7 @@
           <div class="avatar" id="chat-user-avatar">U</div>
           <div>
             <div class="name" id="chat-username">User</div>
-            <div class="status" style="color: var(--accent-green); font-size: 0.8rem;">● Online</div>
+            <div class="status" id="chat-user-status" style="color: var(--accent-green); font-size: 0.8rem;">● Online</div>
           </div>
         </div>
       </div>
@@ -745,7 +791,7 @@
       <div class="chat-input">
         <div class="tools">
           <button class="tool-btn" onclick="document.getElementById('file-upload').click()">📎</button>
-          <input type="file" id="file-upload" class="file-upload" onchange="handleFileUpload(event)" accept="image/*,.pdf,.doc,.docx,.txt,.jpg,.png" />
+          <input type="file" id="file-upload" class="file-upload" onchange="handleFileUpload(event)" />
         </div>
         <input type="text" id="message-input" placeholder="Type your message..." />
         <button onclick="sendMessage()">➤</button>
@@ -778,6 +824,8 @@
     let userProfile = {}; // Store user profile data
     let messageSent = {}; // Track sent messages to prevent duplicates
     let activeMessageId = null; // Track active message ID
+    let notifications = {}; // Track unread messages
+    let userStatus = {}; // Track user online/offline status
 
     // Check if user is already logged in (localStorage)
     window.onload = function() {
@@ -809,6 +857,16 @@
       }
     }
 
+    // Update user avatar by username
+    function updateUserAvatar(elementId, username, profileData) {
+      const element = document.getElementById(elementId);
+      if (profileData && profileData.avatar) {
+        element.innerHTML = `<img src="${profileData.avatar}" alt="Avatar" />`;
+      } else {
+        element.textContent = username.charAt(0).toUpperCase();
+      }
+    }
+
     // Initialize Firebase listeners
     function initializeFirebaseListeners() {
       // Add user to active users
@@ -821,7 +879,13 @@
 
       // Listen for active users
       database.ref('activeUsers').on('value', (snapshot) => {
-        renderUsers(snapshot.val());
+        const users = snapshot.val();
+        renderUsers(users);
+        
+        // Update online/offline status
+        if (users && currentChatUser) {
+          updateChatUserStatus(users[currentChatUser] ? true : false);
+        }
       });
 
       // Listen for messages
@@ -844,6 +908,15 @@
             
             if (!messageExists) {
               chats[chatId].push(message);
+              
+              // Track notifications for received messages
+              if (message.receiver === currentUser && currentChatUser !== message.sender) {
+                if (!notifications[message.sender]) {
+                  notifications[message.sender] = 0;
+                }
+                notifications[message.sender]++;
+                updateNotificationBadge();
+              }
             }
           });
           
@@ -856,6 +929,31 @@
 
       // Remove user on disconnect
       userRef.onDisconnect().remove();
+    }
+
+    // Update notification badge
+    function updateNotificationBadge() {
+      const badge = document.getElementById('header-notification');
+      const totalNotifications = Object.values(notifications).reduce((sum, count) => sum + count, 0);
+      
+      if (totalNotifications > 0) {
+        badge.textContent = totalNotifications;
+        badge.style.display = 'flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    // Update chat user status
+    function updateChatUserStatus(isOnline) {
+      const statusElement = document.getElementById('chat-user-status');
+      if (isOnline) {
+        statusElement.textContent = '● Online';
+        statusElement.style.color = 'var(--accent-green)';
+      } else {
+        statusElement.textContent = '● Offline';
+        statusElement.style.color = 'var(--text-secondary)';
+      }
     }
 
     // Connect function
@@ -908,14 +1006,19 @@
         const div = document.createElement("div");
         div.className = "user-item";
         
-        // Check if user is online
-        const isOnline = true;
+        // Get user profile data
+        const userProfileData = users[username].profile || {};
         
         // Get user avatar if available
         let avatarHtml = username.charAt(0).toUpperCase();
-        if (users[username].profile && users[username].profile.avatar) {
-          avatarHtml = `<img src="${users[username].profile.avatar}" alt="Avatar" />`;
+        if (userProfileData.avatar) {
+          avatarHtml = `<img src="${userProfileData.avatar}" alt="Avatar" />`;
         }
+        
+        // Check for unread messages
+        const unreadCount = notifications[username] || 0;
+        const notificationBadge = unreadCount > 0 ? 
+          `<div class="notification-badge">${unreadCount}</div>` : '';
         
         div.innerHTML = `
           <div class="avatar">${avatarHtml}</div>
@@ -923,7 +1026,8 @@
             <div class="name">${username}</div>
             <div class="handle">@${username.toLowerCase()}</div>
           </div>
-          <div class="status ${isOnline ? '' : 'offline-status'}"><div class="status-dot"></div> ${isOnline ? 'Online' : 'Offline'}</div>
+          <div class="status"><div class="status-dot"></div> Online</div>
+          ${notificationBadge}
         `;
         div.onclick = () => startChat(username);
         container.appendChild(div);
@@ -937,8 +1041,26 @@
       document.getElementById("chat-screen").style.display = "flex";
       document.getElementById("chat-username").textContent = username;
       
-      // Update chat header avatar
-      updateAvatar('chat-user-avatar', username);
+      // Clear notifications for this user
+      if (notifications[username]) {
+        delete notifications[username];
+        updateNotificationBadge();
+      }
+      
+      // Update chat header avatar with user profile
+      database.ref('activeUsers/' + username).once('value').then((snapshot) => {
+        const userData = snapshot.val();
+        if (userData && userData.profile) {
+          updateUserAvatar('chat-user-avatar', username, userData.profile);
+        } else {
+          document.getElementById("chat-user-avatar").textContent = username.charAt(0).toUpperCase();
+        }
+      });
+      
+      // Check if user is online
+      database.ref('activeUsers/' + username).once('value').then((snapshot) => {
+        updateChatUserStatus(snapshot.exists());
+      });
       
       // Display messages for this chat
       displayMessages(username);
@@ -1006,7 +1128,7 @@
         msg.innerHTML = `
           <div class="file-info">
             <span>[FILE] ${messageData.fileName} (${formatFileSize(messageData.fileSize)})</span>
-            <button class="download-btn" onclick="downloadFile('${messageData.fileData}')">⬇️ Download</button>
+            <button class="download-btn" onclick="downloadFile('${messageData.fileData}', '${messageData.fileName}')">⬇️ Download</button>
           </div>
           <div class="time">${timeStr}</div>
         `;
@@ -1029,7 +1151,7 @@
       } else if (isValidImageURL(text)) {
         // Check if it's an image
         msg.innerHTML = `
-          <img src="${text}" alt="Image" />
+          <img src="${text}" alt="Image" class="blur" onclick="toggleImageBlur(this)" />
           <div class="time">${timeStr}</div>
         `;
       } else {
@@ -1042,6 +1164,11 @@
       
       container.appendChild(msg);
       container.scrollTop = container.scrollHeight;
+    }
+
+    // Toggle image blur
+    function toggleImageBlur(imgElement) {
+      imgElement.classList.toggle('blur');
     }
 
     // Check if text is a valid image URL
@@ -1107,10 +1234,10 @@
     }
 
     // Download file
-    function downloadFile(fileData) {
+    function downloadFile(fileData, fileName) {
       const link = document.createElement('a');
       link.href = fileData;
-      link.download = 'downloaded_file';
+      link.download = fileName || 'downloaded_file';
       link.click();
     }
 
@@ -1140,6 +1267,17 @@
         
         // Update user badge
         updateAvatar('current-user-avatar', currentUser);
+        
+        // Update profile in Firebase
+        database.ref('activeUsers/' + currentUser).update({
+          profile: userProfile
+        });
+        
+        // Update localStorage
+        localStorage.setItem('hackronix-user', JSON.stringify({
+          username: currentUser,
+          profile: userProfile
+        }));
       };
 
       reader.readAsDataURL(file);
@@ -1196,6 +1334,8 @@
       userProfile = {};
       chats = {};
       messageSent = {};
+      notifications = {};
+      userStatus = {};
       
       // Go back to login screen
       document.getElementById("profile-screen").style.display = "none";
