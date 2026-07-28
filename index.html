@@ -46,8 +46,23 @@
     position: absolute;
     width: 100%;
     z-index: 10;
+    overflow: hidden;
+}
 
-    background: url("login-bg.gif") center center/cover no-repeat;
+#login-screen::before{
+    content:"";
+    position:absolute;
+    inset:0;
+   background: url("login-bg.gif") center center/cover no-repeat;
+    z-index:-2;
+}
+
+#login-screen::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:rgba(0,0,0,.55);   /* Darkness */
+    z-index:-1;
 }
 
     .logo {
