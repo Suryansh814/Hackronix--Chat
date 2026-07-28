@@ -851,7 +851,7 @@
     function updateAvatar(elementId, username) {
       const element = document.getElementById(elementId);
       if (userProfile.avatar) {
-        element.innerHTML = `<img src="${userProfile.avatar}" alt="Avatar" />`;
+        element.innerHTML = `<img src="\${userProfile.avatar}" alt="Avatar" />`;
       } else {
         element.textContent = username.charAt(0).toUpperCase();
       }
@@ -1012,22 +1012,22 @@
         // Get user avatar if available
         let avatarHtml = username.charAt(0).toUpperCase();
         if (userProfileData.avatar) {
-          avatarHtml = `<img src="${userProfileData.avatar}" alt="Avatar" />`;
+          avatarHtml = `<img src="\${userProfileData.avatar}" alt="Avatar" />`;
         }
         
         // Check for unread messages
         const unreadCount = notifications[username] || 0;
         const notificationBadge = unreadCount > 0 ? 
-          `<div class="notification-badge">${unreadCount}</div>` : '';
+          `<div class="notification-badge">\${unreadCount}</div>` : '';
         
         div.innerHTML = `
-          <div class="avatar">${avatarHtml}</div>
+          <div class="avatar">\${avatarHtml}</div>
           <div class="user-info">
-            <div class="name">${username}</div>
-            <div class="handle">@${username.toLowerCase()}</div>
+            <div class="name">\${username}</div>
+            <div class="handle">@\${username.toLowerCase()}</div>
           </div>
           <div class="status"><div class="status-dot"></div> Online</div>
-          ${notificationBadge}
+          \${notificationBadge}
         `;
         div.onclick = () => startChat(username);
         container.appendChild(div);
@@ -1114,7 +1114,7 @@
     function addMessageToUI(text, type, timestamp, messageData) {
       const container = document.getElementById("chat-messages");
       const msg = document.createElement("div");
-      msg.className = `message ${type}`;
+      msg.className = `message \${type}`;
       
       // Format timestamp
       let timeStr = "";
@@ -1130,7 +1130,7 @@
             <span>[FILE] ${messageData.fileName} (${formatFileSize(messageData.fileSize)})</span>
             <button class="download-btn" onclick="downloadFile('${messageData.fileData}', '${messageData.fileName}')">⬇️ Download</button>
           </div>
-          <div class="time">${timeStr}</div>
+          <div class="time">\${timeStr}</div>
         `;
       } else if (text.startsWith('[FILE]')) {
         // Parse file info
@@ -1140,25 +1140,25 @@
             <div class="file-info">
               <span>[FILE] ${fileMatch[1]} (${fileMatch[2]})</span>
             </div>
-            <div class="time">${timeStr}</div>
+            <div class="time">\${timeStr}</div>
           `;
         } else {
           msg.innerHTML = `
-            ${text}
-            <div class="time">${timeStr}</div>
+            \${text}
+            <div class="time">\${timeStr}</div>
           `;
         }
       } else if (isValidImageURL(text)) {
         // Check if it's an image
         msg.innerHTML = `
-          <img src="${text}" alt="Image" class="blur" onclick="toggleImageBlur(this)" />
-          <div class="time">${timeStr}</div>
+          <img src="\${text}" alt="Image" class="blur" onclick="toggleImageBlur(this)" />
+          <div class="time">\${timeStr}</div>
         `;
       } else {
         // Regular text message
         msg.innerHTML = `
-          ${text}
-          <div class="time">${timeStr}</div>
+          \${text}
+          <div class="time">\${timeStr}</div>
         `;
       }
       
@@ -1263,7 +1263,7 @@
         userProfile.avatar = avatarData;
         
         // Update UI
-        document.getElementById("profile-avatar").innerHTML = `<img src="${avatarData}" alt="Avatar" />`;
+        document.getElementById("profile-avatar").innerHTML = `<img src="\${avatarData}" alt="Avatar" />`;
         
         // Update user badge
         updateAvatar('current-user-avatar', currentUser);
@@ -1413,10 +1413,10 @@
         // Set proper viewport height
         const setViewportHeight = () => {
           const vh = window.innerHeight * 0.01;
-          document.documentElement.style.setProperty('--vh', `${vh}px`);
+          document.documentElement.style.setProperty('--vh', `\${vh}px`);
         };
         
-        setViewportHeight();
+       setViewportHeight();
         window.addEventListener('resize', setViewportHeight);
         
         // Focus handling for input
