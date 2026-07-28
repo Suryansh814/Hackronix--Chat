@@ -725,7 +725,6 @@
         <div class="user-badge" onclick="openProfile()">
           <div class="avatar" id="current-user-avatar">U</div>
           <div class="status"></div>
-          <div class="notification-badge" id="header-notification" style="display: none;">0</div>
         </div>
       </div>
     </div>
@@ -758,10 +757,15 @@
       <div class="profile-avatar-container">
         <div class="profile-avatar" id="profile-avatar">U</div>
         <div class="avatar-upload" onclick="document.getElementById('avatar-upload').click()">📷</div>
-        <input type="file" id="avatar-upload" class="file-upload" accept="image/*" />
       </div>
       <div class="profile-form">
-        <input type="text" id="profile-username" placeholder="Username" />
+       <input
+type="file"
+id="avatar-upload"
+class="file-upload"
+accept="image/*"
+onchange="handleAvatarUpload(event)"
+>
         <button onclick="saveProfile()">Save Profile</button>
         <button class="logout-btn" onclick="logout()">Logout</button>
       </div>
@@ -790,7 +794,12 @@
       <div class="chat-input">
         <div class="tools">
           <button class="tool-btn" onclick="document.getElementById('file-upload').click()">📎</button>
-          <input type="file" id="file-upload" class="file-upload" accept="image/*,.pdf,.doc,.docx,.txt,.jpg,.png,.mp3,.wav" />
+          <input
+type="file"
+id="file-upload"
+class="file-upload"
+accept="image/*,.pdf,.doc,.docx,.txt,.jpg,.png,.mp3,.wav"
+onchange="handleFileUpload(event)">
         </div>
         <input type="text" id="message-input" placeholder="Type your message..." />
         <button onclick="sendMessage()">➤</button>
@@ -920,18 +929,9 @@
     }
 
     // Update notification badge
-    function updateNotificationBadge() {
-      const badge = document.getElementById('header-notification');
-      const totalNotifications = Object.values(notifications).reduce((sum, count) => sum + count, 0);
-      
-      if (totalNotifications > 0) {
-        badge.textContent = totalNotifications > 99 ? '99+' : totalNotifications;
-        badge.style.display = 'flex';
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-
+   function updateNotificationBadge() {
+    return;
+}
     // Update chat user status
     function updateChatUserStatus(isOnline) {
       const statusElement = document.getElementById('chat-user-status');
@@ -1206,7 +1206,6 @@
       document.getElementById("users-screen").style.display = "none";
       document.getElementById("profile-screen").style.display = "flex";
       
-      document.getElementById("profile-username").value = currentUser;
       updateAvatar('profile-avatar', currentUser);
     }
 
@@ -1238,32 +1237,20 @@
 
     // Save profile
     function saveProfile() {
-      const newUsername = document.getElementById("profile-username").value.trim();
-      if (!newUsername) {
-        alert("Username cannot be empty!");
-        return;
-      }
-      
-      if (newUsername !== currentUser) {
-        database.ref('activeUsers/' + currentUser).remove();
-        currentUser = newUsername;
-        
-        localStorage.setItem('hackronix-user', JSON.stringify({
-          username: currentUser,
-          profile: userProfile
-        }));
-        
-        const userRef = database.ref('activeUsers/' + currentUser);
-        userRef.set({
-          name: currentUser,
-          timestamp: firebase.database.ServerValue.TIMESTAMP,
-          profile: userProfile
-        });
-      }
-      
-      updateAvatar('current-user-avatar', currentUser);
-      backToUsers();
-    }
+
+    localStorage.setItem('hackronix-user', JSON.stringify({
+        username: currentUser,
+        profile: userProfile
+    }));
+
+    database.ref('activeUsers/' + currentUser).update({
+        profile: userProfile
+    });
+
+    updateAvatar('current-user-avatar', currentUser);
+
+    backToUsers();
+}
 
     // Logout
     function logout() {
