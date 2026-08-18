@@ -2085,7 +2085,7 @@
        INIT
     ========================== */
 
-    window.onload = async function () {
+    window.addEventListener("DOMContentLoaded", function () {
       const savedUser = localStorage.getItem("hackronix-user");
 
       if (!savedUser) return;
@@ -2093,7 +2093,6 @@
       try {
         const userData = JSON.parse(savedUser);
         const savedUsername = (userData.username || "").trim();
-        userProfile = userData.profile || {};
 
         if (!savedUsername) {
           localStorage.removeItem("hackronix-user");
@@ -2101,26 +2100,39 @@
         }
 
         currentUser = savedUsername;
+        userProfile = userData.profile || {};
 
-        const claimed = await claimUsername(currentUser, true);
-
-        if (!claimed) {
-          currentUser = "";
-          userProfile = {};
-          localStorage.removeItem("hackronix-user");
-          showLoginMessage("That username is already active on another device.");
-          return;
-        }
-
+        // Restore instantly. Network/Firebase must never block the UI.
         enterApp();
-        initializeFirebaseListeners(true);
+
+        // Reclaim this exact browser session in the background.
+        claimUsername(currentUser, true).then(claimed => {
+          if (!claimed) {
+            currentUser = "";
+            userProfile = {};
+            localStorage.removeItem("hackronix-user");
+
+            ["users-screen", "chat-screen", "profile-screen"].forEach(id => {
+              document.getElementById(id).classList.remove("active");
+            });
+
+            document.getElementById("login-screen").style.display = "flex";
+            showToast("This username is active on another device.", true);
+            return;
+          }
+
+          initializeFirebaseListeners();
+        }).catch(error => {
+          console.error(error);
+          initializeFirebaseListeners();
+        });
       } catch (error) {
         console.error(error);
         localStorage.removeItem("hackronix-user");
         currentUser = "";
         userProfile = {};
       }
-    };
+    });
 
     function enterApp() {
       document.getElementById("login-screen").style.display = "none";
@@ -2136,6 +2148,29 @@
 
       const target = document.getElementById(id);
       if (target) target.classList.add("active");
+    }
+
+
+    let renderTimer = null;
+
+    function scheduleUserRender(users) {
+      allUsersCache = users || {};
+
+      if (renderTimer) {
+        cancelAnimationFrame(renderTimer);
+      }
+
+      renderTimer = requestAnimationFrame(() => {
+        renderTimer = null;
+        renderUsers(allUsersCache);
+        renderSidebarUsers(allUsersCache);
+
+        if (currentChatUser && !isCommunityChat) {
+          updateChatUserStatus(
+            !!allUsersCache[usernameKey(currentChatUser)]
+          );
+        }
+      });
     }
 
     /* =========================
@@ -2283,21 +2318,43 @@
     async function claimUsername(username, silent = false) {
       if (!username) return false;
 
-      const userRef = database.ref("activeUsers/" + username);
+      const key = usernameKey(username);
+      const userRef = database.ref("activeUsers/" + key);
+      const sessionId = getSessionId();
 
       try {
         const result = await userRef.transaction(current => {
-          if (current !== null) return;
-          return {
-            name: username,
-            timestamp: firebase.database.ServerValue.TIMESTAMP,
-            profile: userProfile,
-            sessionId: getSessionId()
-          };
+          // Nobody owns this username.
+          if (current === null) {
+            return {
+              name: username,
+              normalizedName: normalizeUsername(username),
+              timestamp: firebase.database.ServerValue.TIMESTAMP,
+              profile: userProfile,
+              sessionId
+            };
+          }
+
+          // Same browser tab refreshing/reopening the page.
+          if (current.sessionId === sessionId) {
+            return {
+              ...current,
+              name: username,
+              normalizedName: normalizeUsername(username),
+              timestamp: firebase.database.ServerValue.TIMESTAMP,
+              profile: userProfile,
+              sessionId
+            };
+          }
+
+          // Another browser/device owns it.
+          return;
         });
 
         if (!result.committed) {
-          if (!silent) showToast("Username is already active. Choose another.", true);
+          if (!silent) {
+            showToast("Username is already active on another device.", true);
+          }
           return false;
         }
 
@@ -2305,7 +2362,11 @@
         return true;
       } catch (error) {
         console.error("Username claim failed:", error);
-        if (!silent) showToast("Could not connect. Please try again.", true);
+
+        if (!silent) {
+          showToast("Connection problem. Check your internet and try again.", true);
+        }
+
         return false;
       }
     }
@@ -2321,53 +2382,65 @@
       return id;
     }
 
+    function initializeConnectionMonitor() {
+      database.ref(".info/connected").on("value", snapshot => {
+        const connected = snapshot.val() === true;
+
+        if (connected && currentUser) {
+          database.ref("activeUsers/" + usernameKey(currentUser))
+            .onDisconnect()
+            .remove();
+        }
+      });
+    }
+
     function initializeFirebaseListeners() {
       if (!currentUser) return;
 
-      const userRef = database.ref("activeUsers/" + currentUser);
+      const userRef = database.ref("activeUsers/" + usernameKey(currentUser));
 
       userRef.update({
         name: currentUser,
+        normalizedName: normalizeUsername(currentUser),
         timestamp: firebase.database.ServerValue.TIMESTAMP,
         profile: userProfile,
         sessionId: getSessionId()
       });
 
       userRef.onDisconnect().remove();
+      initializeConnectionMonitor();
 
       database.ref("activeUsers").on("value", snapshot => {
         const users = snapshot.val() || {};
-        allUsersCache = users;
 
-        renderUsers(users);
-        renderSidebarUsers(users);
+        scheduleUserRender(users);
 
         if (currentChatUser && !isCommunityChat) {
-          updateChatUserStatus(!!users[currentChatUser]);
+          updateChatUserStatus(
+            !!users[usernameKey(currentChatUser)]
+          );
         }
       });
 
       database.ref("messages").on("value", snapshot => {
-        const messages = snapshot.val();
+        const messages = snapshot.val() || {};
 
         chats = {};
 
-        if (messages) {
-          Object.keys(messages).forEach(key => {
-            const message = messages[key];
+        Object.keys(messages).forEach(key => {
+          const message = messages[key];
 
-            if (!message.sender || !message.receiver) return;
+          if (!message || !message.sender || !message.receiver) return;
 
-            const chatId = getChatId(message.sender, message.receiver);
+          const chatId = getChatId(message.sender, message.receiver);
 
-            if (!chats[chatId]) chats[chatId] = [];
+          if (!chats[chatId]) chats[chatId] = [];
 
-            chats[chatId].push({
-              ...message,
-              id: message.id || key
-            });
+          chats[chatId].push({
+            ...message,
+            id: message.id || key
           });
-        }
+        });
 
         Object.keys(chats).forEach(chatId => {
           chats[chatId].sort((a, b) => {
@@ -2378,11 +2451,12 @@
         });
 
         rebuildNotifications();
-        renderUsers(allUsersCache);
 
         if (currentChatUser && !isCommunityChat) {
           displayMessages(currentChatUser);
         }
+
+        scheduleUserRender(allUsersCache);
       });
 
       database.ref("communityMessages").on("value", snapshot => {
@@ -2409,15 +2483,6 @@
 
       notifications = next;
       updateNotificationBadge();
-    }
-
-    function showLoginMessage(message) {
-      const input = document.getElementById("username");
-      if (input) {
-        input.setCustomValidity(message);
-        input.reportValidity();
-        setTimeout(() => input.setCustomValidity(""), 1800);
-      }
     }
 
     /* =========================
@@ -2492,7 +2557,7 @@
           }
         });
 
-        updates["activeUsers/" + username] = null;
+        updates["activeUsers/" + usernameKey(username)] = null;
 
         await database.ref().update(updates);
 
@@ -2578,64 +2643,66 @@
         document.getElementById("user-search")?.value || ""
       ).trim().toLowerCase();
 
-      let userNames = Object.keys(users)
-        .filter(name => name !== currentUser);
+      let entries = Object.entries(users || {})
+        .filter(([, data]) => data && data.name)
+        .filter(([, data]) => normalizeUsername(data.name) !== normalizeUsername(currentUser));
 
       if (currentViewMode === "all") {
-        userNames = getAllChatParticipants();
+        const chatNames = new Set(getAllChatParticipants().map(normalizeUsername));
+
+        entries = entries.filter(([, data]) =>
+          chatNames.has(normalizeUsername(data.name))
+        );
       }
 
       if (currentViewMode === "favorites") {
-        userNames = userNames.filter(name => isFavorite(name));
+        entries = entries.filter(([, data]) => isFavorite(data.name));
       }
 
-      userNames = userNames.filter(name =>
-        name.toLowerCase().includes(search)
+      entries = entries.filter(([, data]) =>
+        normalizeUsername(data.name).includes(search)
       );
 
-      const activeCount = Object.keys(users)
-        .filter(name => name !== currentUser).length;
+      const activeCount = Object.values(users || {})
+        .filter(data =>
+          data &&
+          data.name &&
+          normalizeUsername(data.name) !== normalizeUsername(currentUser)
+        ).length;
 
       document.getElementById("active-count").textContent =
-        currentViewMode === "active" ? userNames.length : activeCount;
+        currentViewMode === "active" ? entries.length : activeCount;
 
       document.getElementById("nav-active-count").textContent = activeCount;
 
-      if (userNames.length === 0) {
-        if (currentViewMode === "favorites") {
-          container.innerHTML = `
-            <div class="empty-state" style="grid-column:1/-1;">
-              <div class="empty-icon">☆</div>
-              <div style="font-weight:800;color:#cbd5cf;">No favorites yet</div>
-              <div style="margin-top:5px;font-size:12px;">Tap the star on a user to keep them here.</div>
-            </div>
-          `;
-        } else if (currentViewMode === "all") {
-          container.innerHTML = `
-            <div class="empty-state" style="grid-column:1/-1;">
-              <div class="empty-icon">▢</div>
-              <div style="font-weight:800;color:#cbd5cf;">No chats yet</div>
-              <div style="margin-top:5px;font-size:12px;">Start a conversation from Active Users.</div>
-            </div>
-          `;
-        } else {
-          container.innerHTML = `
-            <div class="empty-state" style="grid-column:1/-1;">
-              <div class="empty-icon">◉</div>
-              <div style="font-weight:800;color:#cbd5cf;">No active users</div>
-              <div style="margin-top:5px;font-size:12px;">When someone joins, they'll appear here.</div>
-            </div>
-          `;
-        }
+      if (entries.length === 0) {
+        const icon = currentViewMode === "favorites" ? "☆" :
+                     currentViewMode === "all" ? "▢" : "◉";
 
+        const title = currentViewMode === "favorites" ? "No favorites yet" :
+                      currentViewMode === "all" ? "No chats yet" : "No active users";
+
+        const desc = currentViewMode === "favorites"
+          ? "Tap the star on a user to keep them here."
+          : currentViewMode === "all"
+            ? "Start a conversation from Active Users."
+            : "When someone joins, they'll appear here.";
+
+        container.innerHTML = `
+          <div class="empty-state" style="grid-column:1/-1;">
+            <div class="empty-icon">${icon}</div>
+            <div style="font-weight:800;color:#cbd5cf;">${title}</div>
+            <div style="margin-top:5px;font-size:12px;">${desc}</div>
+          </div>
+        `;
         return;
       }
 
-      container.innerHTML = userNames.map(username => {
-        const userData = users[username] || {};
+      container.innerHTML = entries.map(([key, userData]) => {
+        const username = userData.name;
         const profileData = userData.profile || {};
         const unreadCount = notifications[username] || 0;
-        const online = !!users[username];
+        const online = true;
 
         return `
           <div class="user-card" onclick="startChat('${escapeJS(username)}')">
@@ -2648,19 +2715,18 @@
             <div class="user-card-top">
               <div class="avatar">
                 ${avatarHTML(username, profileData)}
-                ${online ? '<span class="online-dot"></span>' : ""}
+                <span class="online-dot"></span>
               </div>
 
               <div style="min-width:0;padding-right:25px;">
                 <div class="user-card-name">${escapeHTML(username)}</div>
-                <div class="user-card-handle">@${escapeHTML(username.toLowerCase())}</div>
+                <div class="user-card-handle">@${escapeHTML(normalizeUsername(username))}</div>
               </div>
             </div>
 
             <div class="user-card-footer">
-              <span class="status-inline" style="color:${online ? "var(--green)" : "var(--muted)"};">
-                <i style="background:${online ? "var(--green)" : "var(--muted)"};box-shadow:${online ? "0 0 7px var(--green)" : "none"};"></i>
-                ${online ? "Online now" : "Offline"}
+              <span class="status-inline">
+                <i></i> Online now
               </span>
               ${unreadCount ? `<span class="unread">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
             </div>
@@ -2675,12 +2741,16 @@
         document.getElementById("chat-sidebar-users")
       ];
 
-      const userNames = Object.keys(users)
-        .filter(name => name !== currentUser)
+      const entries = Object.entries(users || {})
+        .filter(([, data]) =>
+          data &&
+          data.name &&
+          normalizeUsername(data.name) !== normalizeUsername(currentUser)
+        )
         .slice(0, 6);
 
-      const html = userNames.map(username => {
-        const data = users[username] || {};
+      const html = entries.map(([, data]) => {
+        const username = data.name;
         const profileData = data.profile || {};
         const unreadCount = notifications[username] || 0;
 
@@ -2700,9 +2770,13 @@
       }).join("");
 
       targets.forEach(target => {
-        if (target) target.innerHTML = html || `
-          <div style="padding:10px;color:#59655f;font-size:10px;">No one else is online.</div>
-        `;
+        if (target) {
+          target.innerHTML = html || `
+            <div style="padding:10px;color:#59655f;font-size:10px;">
+              No one else is online.
+            </div>
+          `;
+        }
       });
     }
 
@@ -2808,6 +2882,16 @@
        CHAT
     ========================== */
 
+
+    function normalizeUsername(username) {
+      return String(username || "").trim().toLowerCase();
+    }
+
+    function usernameKey(username) {
+      // Firebase RTDB keys cannot contain . # $ [ ] /
+      return normalizeUsername(username).replace(/[.#$[\]/]/g, "_");
+    }
+
     function getChatId(user1, user2) {
       return [user1, user2].sort().join("-");
     }
@@ -2835,7 +2919,7 @@
         updateAvatar("chat-user-avatar", username, {});
       }
 
-      updateChatUserStatus(!!allUsersCache[username]);
+      updateChatUserStatus(!!allUsersCache[usernameKey(username)]);
       displayMessages(username);
     }
 
@@ -2907,11 +2991,17 @@
         timestamp: firebase.database.ServerValue.TIMESTAMP
       };
 
-      database.ref("messages").push(messageData);
-
-      messageSent[messageId] = true;
       input.value = "";
       input.focus();
+
+      const pushRef = database.ref("messages").push();
+      messageSent[messageId] = true;
+
+      pushRef.set(messageData).catch(error => {
+        console.error("Message send failed:", error);
+        input.value = msg;
+        showToast("Message could not be sent. Try again.", true);
+      });
     }
 
     function addMessageToUI(text, type, timestamp, messageData) {
@@ -3074,7 +3164,7 @@
         updateAllCurrentUserUI();
 
         if (currentUser) {
-          database.ref("activeUsers/" + currentUser).update({
+          database.ref("activeUsers/" + usernameKey(currentUser)).update({
             profile: userProfile
           });
 
@@ -3098,7 +3188,7 @@
         }));
 
         if (currentUser) {
-          await database.ref("activeUsers/" + currentUser).update({
+          await database.ref("activeUsers/" + usernameKey(currentUser)).update({
             profile: userProfile
           });
         }
@@ -3245,10 +3335,9 @@
       }
     });
 
-    window.addEventListener("beforeunload", () => {
-      if (currentUser) {
-        database.ref("activeUsers/" + currentUser).remove();
-      }
+    window.addEventListener("pagehide", () => {
+      // Presence is handled by Firebase onDisconnect().
+      // Do not remove it here: page refreshes must keep the session.
     });
   </script>
 <div id="toast" class="toast"></div>
