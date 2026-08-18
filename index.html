@@ -1617,6 +1617,187 @@
       display: none;
     }
 
+
+    /* =========================
+       VOICE CALL - ADDITIVE ONLY
+    ========================== */
+    .voice-call-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, .68);
+      backdrop-filter: blur(14px);
+    }
+
+    .voice-call-overlay.show {
+      display: flex;
+    }
+
+    .voice-call-card {
+      width: min(390px, calc(100vw - 32px));
+      padding: 30px 24px 22px;
+      border: 1px solid var(--line-strong);
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(49,242,123,.12), transparent 42%),
+        var(--panel-2);
+      box-shadow: 0 30px 90px rgba(0,0,0,.55), 0 0 50px rgba(49,242,123,.08);
+      text-align: center;
+    }
+
+    body.light-mode .voice-call-overlay {
+      background: rgba(20, 30, 24, .35);
+    }
+
+    .voice-call-avatar {
+      width: 86px;
+      height: 86px;
+      margin: 0 auto 17px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border: 2px solid rgba(49,242,123,.35);
+      border-radius: 50%;
+      background: #122019;
+      color: var(--green);
+      font-size: 27px;
+      font-weight: 900;
+      box-shadow: 0 0 34px rgba(49,242,123,.12);
+    }
+
+    .voice-call-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .voice-call-label {
+      color: var(--green);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 1.8px;
+      text-transform: uppercase;
+    }
+
+    .voice-call-name {
+      margin-top: 7px;
+      color: var(--text);
+      font-size: 23px;
+      font-weight: 900;
+      letter-spacing: -.8px;
+    }
+
+    .voice-call-status {
+      min-height: 18px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .voice-call-timer {
+      margin-top: 5px;
+      color: var(--green);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .voice-call-actions {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 25px;
+    }
+
+    .voice-call-btn {
+      min-width: 118px;
+      height: 44px;
+      padding: 0 17px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 900;
+      transition: transform .16s ease, filter .16s ease;
+    }
+
+    .voice-call-btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+
+    .voice-call-btn.accept {
+      color: #041007;
+      background: var(--green);
+    }
+
+    .voice-call-btn.reject,
+    .voice-call-btn.end {
+      color: #fff;
+      background: #d83d52;
+    }
+
+    .voice-call-btn.mute {
+      color: var(--text);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.04);
+    }
+
+    .voice-call-btn.hidden-call-btn {
+      display: none;
+    }
+
+    .voice-call-wave {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 22px;
+      margin-top: 13px;
+    }
+
+    .voice-call-wave span {
+      width: 3px;
+      height: 8px;
+      border-radius: 4px;
+      background: var(--green);
+      animation: voiceWave 1s ease-in-out infinite;
+    }
+
+    .voice-call-wave span:nth-child(2) { animation-delay: .12s; height: 14px; }
+    .voice-call-wave span:nth-child(3) { animation-delay: .24s; height: 20px; }
+    .voice-call-wave span:nth-child(4) { animation-delay: .36s; height: 13px; }
+    .voice-call-wave span:nth-child(5) { animation-delay: .48s; height: 8px; }
+
+    @keyframes voiceWave {
+      0%, 100% { transform: scaleY(.65); opacity: .55; }
+      50% { transform: scaleY(1.15); opacity: 1; }
+    }
+
+    @media (max-width: 760px) {
+      .voice-call-overlay {
+        align-items: flex-end;
+        padding: 0;
+      }
+
+      .voice-call-card {
+        width: 100%;
+        border-radius: 24px 24px 0 0;
+        padding: 32px 20px calc(24px + env(safe-area-inset-bottom));
+      }
+
+      .voice-call-actions {
+        margin-top: 22px;
+      }
+
+      .voice-call-btn {
+        flex: 1;
+        min-width: 0;
+      }
+    }
+
     @media (max-width: 1000px) {
       :root { --sidebar: 235px; }
 
@@ -2128,7 +2309,7 @@
 
             <div class="chat-actions">
               <button class="icon-btn hide-mobile" title="Search">⌕</button>
-              <button class="icon-btn hide-mobile" title="Call">◌</button>
+              <button class="icon-btn hide-mobile" id="voice-call-btn" onclick="startVoiceCall()" title="Voice Call" aria-label="Voice Call">☎</button>
               <button class="icon-btn" onclick="saveChat()" title="Save Chat">↓</button>
             </div>
           </div>
@@ -3618,7 +3799,681 @@
       // Presence is handled by Firebase onDisconnect().
       // Do not remove it here: page refreshes must keep the session.
     });
+
+    /* =========================
+       HACKRONIX VOICE CALL
+       WebRTC + Firebase RTDB
+       Additive feature only
+    ========================== */
+
+    let voiceCallInitialized = false;
+    let voiceCallId = null;
+    let voiceCallRole = null; // "caller" | "callee"
+    let voiceCallPeer = null;
+    let voiceCallStream = null;
+    let voiceCallRemoteCandidateQueue = [];
+    let voiceCallStatusUnsubscribe = null;
+    let voiceCallCandidateUnsubscribe = null;
+    let voiceCallCallListener = null;
+    let voiceCallTimerInterval = null;
+    let voiceCallStartedAt = null;
+    let voiceCallMuted = false;
+    let voiceIncomingCall = null;
+    let voiceCallEnding = false;
+
+    const VOICE_RTC_CONFIG = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ]
+    };
+
+    function getVoiceCallOverlay() {
+      return document.getElementById("voice-call-overlay");
+    }
+
+    function getVoiceCallUserProfile(username) {
+      const user = allUsersCache[usernameKey(username)];
+      return user && user.profile ? user.profile : {};
+    }
+
+    function renderVoiceCallAvatar(username) {
+      const el = document.getElementById("voice-call-avatar");
+      if (!el) return;
+
+      const profile = getVoiceCallUserProfile(username);
+
+      if (profile.avatar) {
+        el.innerHTML = `<img src="${escapeHTML(profile.avatar)}" alt="Avatar">`;
+      } else {
+        el.textContent = (username || "U").charAt(0).toUpperCase();
+      }
+    }
+
+    function setVoiceCallOverlay(show) {
+      const overlay = getVoiceCallOverlay();
+      if (!overlay) return;
+
+      overlay.classList.toggle("show", !!show);
+      overlay.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+
+    function setVoiceCallButtons(mode) {
+      const accept = document.getElementById("voice-call-accept");
+      const reject = document.getElementById("voice-call-reject");
+      const mute = document.getElementById("voice-call-mute");
+      const end = document.getElementById("voice-call-end");
+      const timer = document.getElementById("voice-call-timer");
+      const wave = document.getElementById("voice-call-wave");
+
+      [accept, reject, mute, end].forEach(btn => {
+        if (btn) btn.classList.add("hidden-call-btn");
+      });
+
+      if (mode === "incoming") {
+        accept?.classList.remove("hidden-call-btn");
+        reject?.classList.remove("hidden-call-btn");
+        if (timer) timer.classList.add("hidden");
+        if (wave) wave.style.display = "flex";
+      } else if (mode === "calling") {
+        end?.classList.remove("hidden-call-btn");
+        if (timer) timer.classList.add("hidden");
+        if (wave) wave.style.display = "flex";
+      } else if (mode === "active") {
+        mute?.classList.remove("hidden-call-btn");
+        end?.classList.remove("hidden-call-btn");
+        if (timer) timer.classList.remove("hidden");
+        if (wave) wave.style.display = "flex";
+      }
+    }
+
+    function showVoiceCallUI(name, label, status, mode) {
+      document.getElementById("voice-call-name").textContent = name || "User";
+      document.getElementById("voice-call-label").textContent = label || "VOICE CALL";
+      document.getElementById("voice-call-status").textContent = status || "";
+      renderVoiceCallAvatar(name);
+      setVoiceCallButtons(mode);
+      setVoiceCallOverlay(true);
+    }
+
+    function updateVoiceCallStatus(status) {
+      const el = document.getElementById("voice-call-status");
+      if (el) el.textContent = status || "";
+    }
+
+    function startVoiceTimer() {
+      clearInterval(voiceCallTimerInterval);
+      voiceCallStartedAt = Date.now();
+
+      const timer = document.getElementById("voice-call-timer");
+
+      const tick = () => {
+        if (!timer || !voiceCallStartedAt) return;
+
+        const seconds = Math.floor((Date.now() - voiceCallStartedAt) / 1000);
+        const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+        const ss = String(seconds % 60).padStart(2, "0");
+
+        timer.textContent = `${mm}:${ss}`;
+      };
+
+      tick();
+      voiceCallTimerInterval = setInterval(tick, 1000);
+    }
+
+    function stopVoiceTimer() {
+      clearInterval(voiceCallTimerInterval);
+      voiceCallTimerInterval = null;
+      voiceCallStartedAt = null;
+
+      const timer = document.getElementById("voice-call-timer");
+      if (timer) {
+        timer.classList.add("hidden");
+        timer.textContent = "00:00";
+      }
+    }
+
+    function attachVoiceRemoteAudio(stream) {
+      const audio = document.getElementById("voice-call-audio");
+      if (!audio) return;
+
+      audio.srcObject = stream;
+      audio.autoplay = true;
+      audio.playsInline = true;
+
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch(() => {
+          showToast("Tap the call screen once to enable audio.", true);
+        });
+      }
+    }
+
+    function createVoicePeerConnection() {
+      if (voiceCallPeer) {
+        try { voiceCallPeer.close(); } catch {}
+      }
+
+      voiceCallRemoteCandidateQueue = [];
+
+      const pc = new RTCPeerConnection(VOICE_RTC_CONFIG);
+
+      pc.onicecandidate = event => {
+        if (!event.candidate || !voiceCallId || !voiceCallRole) return;
+
+        const side = voiceCallRole === "caller" ? "caller" : "callee";
+
+        database.ref(`calls/${voiceCallId}/candidates/${side}`).push({
+          candidate: event.candidate.toJSON(),
+          createdAt: firebase.database.ServerValue.TIMESTAMP
+        }).catch(error => {
+          console.error("ICE candidate write failed:", error);
+        });
+      };
+
+      pc.ontrack = event => {
+        if (event.streams && event.streams[0]) {
+          attachVoiceRemoteAudio(event.streams[0]);
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+
+        if (state === "connected") {
+          updateVoiceCallStatus("Connected");
+          startVoiceTimer();
+        } else if (state === "connecting") {
+          updateVoiceCallStatus("Connecting...");
+        } else if (state === "disconnected") {
+          updateVoiceCallStatus("Connection interrupted...");
+        } else if (state === "failed") {
+          updateVoiceCallStatus("Connection failed");
+          setTimeout(() => {
+            if (voiceCallId) endVoiceCall(true);
+          }, 1200);
+        } else if (state === "closed") {
+          stopVoiceTimer();
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "failed") {
+          updateVoiceCallStatus("Network connection failed");
+        }
+      };
+
+      voiceCallPeer = pc;
+      return pc;
+    }
+
+    async function addVoiceRemoteCandidate(candidateData) {
+      if (!voiceCallPeer || !candidateData) return;
+
+      const candidate = new RTCIceCandidate(candidateData);
+
+      if (voiceCallPeer.remoteDescription && voiceCallPeer.remoteDescription.type) {
+        try {
+          await voiceCallPeer.addIceCandidate(candidate);
+        } catch (error) {
+          console.warn("Remote ICE candidate rejected:", error);
+        }
+      } else {
+        voiceCallRemoteCandidateQueue.push(candidate);
+      }
+    }
+
+    async function flushVoiceRemoteCandidates() {
+      if (!voiceCallPeer || !voiceCallPeer.remoteDescription) return;
+
+      const queue = voiceCallRemoteCandidateQueue.splice(0);
+
+      for (const candidate of queue) {
+        try {
+          await voiceCallPeer.addIceCandidate(candidate);
+        } catch (error) {
+          console.warn("Queued ICE candidate rejected:", error);
+        }
+      }
+    }
+
+    function listenVoiceCandidates(callId, side) {
+      if (voiceCallCandidateUnsubscribe) {
+        voiceCallCandidateUnsubscribe();
+        voiceCallCandidateUnsubscribe = null;
+      }
+
+      const ref = database.ref(`calls/${callId}/candidates/${side}`);
+
+      const handler = snapshot => {
+        const data = snapshot.val();
+        if (!data || !data.candidate) return;
+        addVoiceRemoteCandidate(data.candidate);
+      };
+
+      ref.on("child_added", handler);
+      voiceCallCandidateUnsubscribe = () => ref.off("child_added", handler);
+    }
+
+    function listenVoiceCallStatus(callId) {
+      if (voiceCallStatusUnsubscribe) {
+        voiceCallStatusUnsubscribe();
+        voiceCallStatusUnsubscribe = null;
+      }
+
+      const ref = database.ref(`calls/${callId}`);
+      const handler = snapshot => {
+        const call = snapshot.val();
+
+        if (!call) {
+          if (voiceCallId === callId && !voiceCallEnding) {
+            finishVoiceCallUI("Call ended.");
+          }
+          return;
+        }
+
+        /*
+         * Caller receives the callee's SDP answer through the same RTDB
+         * call record. Apply it exactly once before ICE candidates.
+         */
+        if (
+          voiceCallRole === "caller" &&
+          call.answer &&
+          voiceCallPeer &&
+          !voiceCallPeer.remoteDescription
+        ) {
+          voiceCallPeer.setRemoteDescription(
+            new RTCSessionDescription(call.answer)
+          ).then(() => flushVoiceRemoteCandidates())
+           .catch(error => {
+             console.error("Remote answer failed:", error);
+             updateVoiceCallStatus("Could not establish the call.");
+           });
+        }
+
+        if (call.status === "active") {
+          updateVoiceCallStatus("Connecting...");
+          setVoiceCallButtons("active");
+        }
+
+        if (call.status === "rejected") {
+          finishVoiceCallUI("Call declined.");
+        }
+
+        if (call.status === "ended") {
+          finishVoiceCallUI("Call ended.");
+        }
+      };
+
+      ref.on("value", handler);
+      voiceCallStatusUnsubscribe = () => ref.off("value", handler);
+    }
+
+    function initializeVoiceCallSystem() {
+      if (voiceCallInitialized || !currentUser) return;
+      voiceCallInitialized = true;
+
+      /*
+       * One listener for all calls. This matches the current username-only
+       * session model and does not require Firebase Authentication.
+       */
+      voiceCallCallListener = snapshot => {
+        if (!currentUser) return;
+
+        const calls = snapshot.val() || {};
+
+        Object.entries(calls).forEach(([callId, call]) => {
+          if (!call || call.status !== "ringing") return;
+          if (normalizeUsername(call.callee) !== normalizeUsername(currentUser)) return;
+          if (normalizeUsername(call.caller) === normalizeUsername(currentUser)) return;
+
+          if (voiceCallId && voiceCallId !== callId) {
+            database.ref(`calls/${callId}`).update({
+              status: "rejected",
+              endedAt: firebase.database.ServerValue.TIMESTAMP
+            });
+            return;
+          }
+
+          if (voiceCallId === callId || voiceIncomingCall?.id === callId) return;
+
+          voiceIncomingCall = {
+            id: callId,
+            caller: call.caller,
+            call
+          };
+
+          showVoiceCallUI(
+            call.caller,
+            "INCOMING VOICE CALL",
+            `${call.caller} is calling you...`,
+            "incoming"
+          );
+        });
+      };
+
+      database.ref("calls").on("value", voiceCallCallListener);
+    }
+
+    async function startVoiceCall() {
+      if (!currentUser || !currentChatUser || isCommunityChat) {
+        showToast("Voice calls are available in personal chats.", true);
+        return;
+      }
+
+      if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
+        showToast("Voice calling is not supported by this browser.", true);
+        return;
+      }
+
+      if (voiceCallId) {
+        showToast("You already have an active call.", true);
+        return;
+      }
+
+      try {
+        voiceCallEnding = false;
+        voiceCallRole = "caller";
+
+        updateVoiceCallStatus("Requesting microphone...");
+        showVoiceCallUI(
+          currentChatUser,
+          "VOICE CALL",
+          "Requesting microphone...",
+          "calling"
+        );
+
+        voiceCallStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
+
+        const pc = createVoicePeerConnection();
+
+        voiceCallStream.getTracks().forEach(track => pc.addTrack(track, voiceCallStream));
+
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true
+        });
+
+        await pc.setLocalDescription(offer);
+
+        const callRef = database.ref("calls").push();
+        voiceCallId = callRef.key;
+
+        await callRef.set({
+          caller: currentUser,
+          callee: currentChatUser,
+          status: "ringing",
+          offer: {
+            type: pc.localDescription.type,
+            sdp: pc.localDescription.sdp
+          },
+          createdAt: firebase.database.ServerValue.TIMESTAMP
+        });
+
+        callRef.onDisconnect().remove();
+
+        listenVoiceCallStatus(voiceCallId);
+        listenVoiceCandidates(voiceCallId, "callee");
+
+        updateVoiceCallStatus(`Calling ${currentChatUser}...`);
+      } catch (error) {
+        console.error("Voice call start failed:", error);
+        showToast(
+          error?.name === "NotAllowedError"
+            ? "Microphone permission was denied."
+            : "Could not start the voice call.",
+          true
+        );
+        await cleanupVoiceCall(false);
+      }
+    }
+
+    async function acceptVoiceCall() {
+      if (!voiceIncomingCall || !currentUser) return;
+
+      const incoming = voiceIncomingCall;
+      voiceIncomingCall = null;
+
+      try {
+        voiceCallEnding = false;
+        voiceCallId = incoming.id;
+        voiceCallRole = "callee";
+
+        showVoiceCallUI(
+          incoming.caller,
+          "VOICE CALL",
+          "Requesting microphone...",
+          "calling"
+        );
+
+        voiceCallStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
+
+        const pc = createVoicePeerConnection();
+
+        voiceCallStream.getTracks().forEach(track => pc.addTrack(track, voiceCallStream));
+
+        if (!incoming.call.offer) {
+          throw new Error("Missing call offer.");
+        }
+
+        await pc.setRemoteDescription(new RTCSessionDescription(incoming.call.offer));
+        await flushVoiceRemoteCandidates();
+
+        listenVoiceCallStatus(voiceCallId);
+        listenVoiceCandidates(voiceCallId, "caller");
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        await database.ref(`calls/${voiceCallId}`).update({
+          answer: {
+            type: pc.localDescription.type,
+            sdp: pc.localDescription.sdp
+          },
+          status: "active",
+          answeredAt: firebase.database.ServerValue.TIMESTAMP
+        });
+
+        updateVoiceCallStatus("Connecting...");
+      } catch (error) {
+        console.error("Voice call accept failed:", error);
+
+        if (voiceCallId) {
+          await database.ref(`calls/${voiceCallId}`).update({
+            status: "ended",
+            endedAt: firebase.database.ServerValue.TIMESTAMP
+          }).catch(() => {});
+        }
+
+        await cleanupVoiceCall(false);
+        showToast("Could not accept the voice call.", true);
+      }
+    }
+
+    async function rejectVoiceCall() {
+      const callId = voiceIncomingCall?.id || voiceCallId;
+
+      if (callId) {
+        await database.ref(`calls/${callId}`).update({
+          status: "rejected",
+          endedAt: firebase.database.ServerValue.TIMESTAMP
+        }).catch(() => {});
+
+        setTimeout(() => {
+          database.ref(`calls/${callId}`).remove().catch(() => {});
+        }, 900);
+      }
+
+      voiceIncomingCall = null;
+
+      if (!voiceCallId) {
+        setVoiceCallOverlay(false);
+        showToast("Call declined.");
+      } else {
+        await cleanupVoiceCall(false);
+      }
+    }
+
+    async function endVoiceCall(silent = false) {
+      if (voiceCallEnding) return;
+      voiceCallEnding = true;
+
+      const callId = voiceCallId;
+
+      if (callId) {
+        await database.ref(`calls/${callId}`).update({
+          status: "ended",
+          endedAt: firebase.database.ServerValue.TIMESTAMP
+        }).catch(() => {});
+
+        setTimeout(() => {
+          database.ref(`calls/${callId}`).remove().catch(() => {});
+        }, 900);
+      }
+
+      voiceIncomingCall = null;
+      await cleanupVoiceCall(false);
+
+      if (!silent) {
+        showToast("Voice call ended.");
+      }
+    }
+
+    async function cleanupVoiceCall(hideUI = true) {
+      if (voiceCallStatusUnsubscribe) {
+        voiceCallStatusUnsubscribe();
+        voiceCallStatusUnsubscribe = null;
+      }
+
+      if (voiceCallCandidateUnsubscribe) {
+        voiceCallCandidateUnsubscribe();
+        voiceCallCandidateUnsubscribe = null;
+      }
+
+      if (voiceCallPeer) {
+        try {
+          voiceCallPeer.ontrack = null;
+          voiceCallPeer.onicecandidate = null;
+          voiceCallPeer.close();
+        } catch {}
+      }
+
+      voiceCallPeer = null;
+
+      if (voiceCallStream) {
+        voiceCallStream.getTracks().forEach(track => {
+          try { track.stop(); } catch {}
+        });
+      }
+
+      voiceCallStream = null;
+      voiceCallRemoteCandidateQueue = [];
+      voiceCallId = null;
+      voiceCallRole = null;
+      voiceCallMuted = false;
+
+      const audio = document.getElementById("voice-call-audio");
+      if (audio) {
+        audio.pause();
+        audio.srcObject = null;
+      }
+
+      stopVoiceTimer();
+
+      const mute = document.getElementById("voice-call-mute");
+      if (mute) mute.textContent = "MUTE";
+
+      if (hideUI) {
+        setVoiceCallOverlay(false);
+      }
+    }
+
+    async function finishVoiceCallUI(message) {
+      if (voiceCallEnding) return;
+      voiceCallEnding = true;
+
+      voiceIncomingCall = null;
+      await cleanupVoiceCall(true);
+
+      if (message) showToast(message);
+      voiceCallEnding = false;
+    }
+
+    async function toggleVoiceMute() {
+      if (!voiceCallStream) return;
+
+      voiceCallMuted = !voiceCallMuted;
+
+      voiceCallStream.getAudioTracks().forEach(track => {
+        track.enabled = !voiceCallMuted;
+      });
+
+      const mute = document.getElementById("voice-call-mute");
+      if (mute) mute.textContent = voiceCallMuted ? "UNMUTE" : "MUTE";
+
+      updateVoiceCallStatus(voiceCallMuted ? "Muted" : "Connected");
+    }
+
+    // Ensure the call listener starts with the same Firebase listener lifecycle.
+    const __originalInitializeFirebaseListeners = initializeFirebaseListeners;
+    initializeFirebaseListeners = function () {
+      __originalInitializeFirebaseListeners();
+      initializeVoiceCallSystem();
+    };
+
+    window.addEventListener("pagehide", () => {
+      /*
+       * Firebase onDisconnect() handles the call record if the tab/device
+       * disappears unexpectedly. Local media is stopped by the browser.
+       */
+      if (voiceCallId) {
+        database.ref(`calls/${voiceCallId}`).onDisconnect().remove().catch(() => {});
+      }
+    });
+
+
   </script>
+
+  <!-- =========================
+       VOICE CALL OVERLAY
+       Additive feature only
+  ========================== -->
+  <div id="voice-call-overlay" class="voice-call-overlay" aria-hidden="true">
+    <div class="voice-call-card">
+      <div class="voice-call-avatar" id="voice-call-avatar">U</div>
+      <div class="voice-call-label" id="voice-call-label">VOICE CALL</div>
+      <div class="voice-call-name" id="voice-call-name">User</div>
+      <div class="voice-call-status" id="voice-call-status">Calling...</div>
+      <div class="voice-call-timer hidden" id="voice-call-timer">00:00</div>
+
+      <div class="voice-call-wave" id="voice-call-wave" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+
+      <div class="voice-call-actions">
+        <button class="voice-call-btn accept hidden-call-btn" id="voice-call-accept" onclick="acceptVoiceCall()">ACCEPT</button>
+        <button class="voice-call-btn reject hidden-call-btn" id="voice-call-reject" onclick="rejectVoiceCall()">DECLINE</button>
+        <button class="voice-call-btn mute hidden-call-btn" id="voice-call-mute" onclick="toggleVoiceMute()">MUTE</button>
+        <button class="voice-call-btn end hidden-call-btn" id="voice-call-end" onclick="endVoiceCall()">END CALL</button>
+      </div>
+    </div>
+  </div>
+
+  <audio id="voice-call-audio" autoplay playsinline></audio>
+
 <div id="toast" class="toast"></div>
 
 </body>
