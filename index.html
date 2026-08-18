@@ -62,6 +62,136 @@
 
     .hidden { display: none !important; }
 
+
+    /* =========================
+       LIGHT THEME
+    ========================== */
+    html.theme-preload-light body {
+      background: #f3f6f4;
+    }
+
+    body.light-mode {
+      --bg: #f3f6f4;
+      --bg-2: #ffffff;
+      --panel: rgba(255,255,255,.96);
+      --panel-2: #ffffff;
+      --panel-3: #eef3f0;
+      --line: rgba(22, 58, 40, .12);
+      --line-strong: rgba(11, 173, 76, .30);
+      --text: #15201a;
+      --muted: #68766e;
+      --muted-2: #89958f;
+      --green: #0cab4e;
+      --green-2: #078c3e;
+      --green-soft: rgba(12,171,78,.09);
+      --green-glow: rgba(12,171,78,.15);
+      --shadow: 0 24px 70px rgba(20,45,32,.14);
+    }
+
+    body.light-mode .sidebar,
+    body.light-mode .topbar,
+    body.light-mode .chat-head,
+    body.light-mode .chat-composer {
+      background: rgba(255,255,255,.96);
+    }
+
+    body.light-mode .sidebar {
+      border-right-color: rgba(22,58,40,.12);
+    }
+
+    body.light-mode .topbar,
+    body.light-mode .chat-head,
+    body.light-mode .chat-composer {
+      border-color: rgba(22,58,40,.12);
+    }
+
+    body.light-mode .search-box input,
+    body.light-mode .composer {
+      background: #f7faf8;
+      color: var(--text);
+    }
+
+    body.light-mode .search-box input::placeholder,
+    body.light-mode .composer input::placeholder {
+      color: #8b9790;
+    }
+
+    body.light-mode .users-page,
+    body.light-mode .profile-page {
+      background:
+        radial-gradient(circle at 20% -10%, rgba(12,171,78,.06), transparent 25%),
+        var(--bg);
+    }
+
+    body.light-mode .user-card,
+    body.light-mode .profile-panel {
+      background: linear-gradient(145deg, #ffffff, #f5f8f6);
+      box-shadow: 0 10px 30px rgba(24,55,39,.06);
+    }
+
+    body.light-mode .user-card:hover {
+      box-shadow: 0 15px 35px rgba(24,55,39,.10);
+    }
+
+    body.light-mode .chat-messages {
+      background:
+        radial-gradient(circle at 50% 20%, rgba(12,171,78,.035), transparent 30%),
+        #f4f7f5;
+    }
+
+    body.light-mode .chat-messages::before {
+      opacity: .025;
+    }
+
+    body.light-mode .message.received,
+    body.light-mode .community-message {
+      background: #ffffff;
+      color: #26332c;
+      border-color: rgba(22,58,40,.11);
+      box-shadow: 0 7px 22px rgba(24,55,39,.06);
+    }
+
+    body.light-mode .message.sent,
+    body.light-mode .community-message.mine {
+      background: linear-gradient(145deg, #dff8e9, #d2f3df);
+      color: #153120;
+      border-color: rgba(12,171,78,.22);
+    }
+
+    body.light-mode .date-chip {
+      background: rgba(255,255,255,.92);
+      border-color: rgba(22,58,40,.11);
+    }
+
+    body.light-mode .mini-name,
+    body.light-mode .profile-info-value {
+      color: #26332c;
+    }
+
+    body.light-mode .mobile-bottom {
+      background: rgba(255,255,255,.94);
+    }
+
+    body.light-mode .toast {
+      background: rgba(255,255,255,.97);
+      color: #1c2a22;
+      box-shadow: 0 16px 45px rgba(20,45,32,.16), 0 0 28px rgba(12,171,78,.08);
+    }
+
+    body.light-mode .favorite-star {
+      background: rgba(255,255,255,.72);
+      color: #6c7971;
+    }
+
+    body.light-mode .online-dot {
+      border-color: #ffffff;
+    }
+
+    body.light-mode .user-card.has-unread::before {
+      box-shadow: 0 0 12px rgba(255,64,88,.45);
+    }
+
+
     /* =========================
        LOGIN
     ========================== */
@@ -153,6 +283,25 @@
       font-weight: 900;
       letter-spacing: -2px;
       box-shadow: inset 0 0 25px rgba(49, 242, 123, .05);
+    }
+
+    .brand-mark.logo-mark {
+      padding: 5px;
+      overflow: hidden;
+    }
+
+    .brand-mark.logo-mark img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+
+    .brand-mark.logo-fallback::after {
+      content: "H";
+      color: var(--green);
+      font-weight: 900;
+      letter-spacing: -2px;
     }
 
     .brand-name {
@@ -1329,6 +1478,62 @@
       background: var(--green-soft);
     }
 
+
+    .user-card.has-unread {
+      border-color: rgba(255, 64, 88, .38);
+      box-shadow: 0 0 0 1px rgba(255,64,88,.05), 0 12px 30px rgba(0,0,0,.20);
+    }
+
+    .user-card.has-unread::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 17px;
+      bottom: 17px;
+      width: 3px;
+      border-radius: 0 4px 4px 0;
+      background: #ff4058;
+      box-shadow: 0 0 12px rgba(255,64,88,.70);
+    }
+
+    .message-alert-dot {
+      position: absolute;
+      z-index: 3;
+      right: 49px;
+      top: 21px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ff4058;
+      box-shadow:
+        0 0 0 3px rgba(255,64,88,.10),
+        0 0 13px rgba(255,64,88,.75);
+      animation: notificationPulse 1.45s ease-in-out infinite;
+    }
+
+    .mini-user.has-unread .avatar::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -1px;
+      width: 9px;
+      height: 9px;
+      border: 2px solid #0b110e;
+      border-radius: 50%;
+      background: #ff4058;
+      box-shadow: 0 0 10px rgba(255,64,88,.70);
+      animation: notificationPulse 1.45s ease-in-out infinite;
+    }
+
+    @keyframes notificationPulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.22); opacity: .72; }
+    }
+
+    .notify.has-alert {
+      animation: notificationPulse 1.45s ease-in-out infinite;
+    }
+
     .community-card {
       position: relative;
       padding: 22px;
@@ -1475,7 +1680,6 @@
 
       .shortcut { display: none; }
 
-      .top-actions .theme-btn { display: none; }
 
       .top-user {
         margin-left: 0;
@@ -1605,8 +1809,24 @@
       .login-note { font-size: 11px; }
 
       .top-actions .notify-btn { display: none; }
+
+      .top-actions .theme-btn {
+        display: grid;
+        width: 34px;
+        height: 34px;
+      }
     }
   </style>
+
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem("hackronix-theme") === "light") {
+          document.documentElement.classList.add("theme-preload-light");
+        }
+      } catch (_) {}
+    })();
+  </script>
 </head>
 
 <body>
@@ -1620,7 +1840,7 @@
     <div class="login-shell">
       <div class="login-brand">
         <div class="brand-top">
-          <div class="brand-mark">H</div>
+          <div class="brand-mark logo-mark"><img src="hackronix-logo.png" alt="HACKRONIX logo" onerror="this.style.display='none';this.parentElement.classList.add('logo-fallback');" /></div>
           <div class="brand-name">HACK<span>RONIX</span></div>
         </div>
 
@@ -1699,7 +1919,7 @@
 
       <aside class="sidebar">
         <div class="side-brand">
-          <div class="brand-mark">H</div>
+          <div class="brand-mark logo-mark"><img src="hackronix-logo.png" alt="HACKRONIX logo" onerror="this.style.display='none';this.parentElement.classList.add('logo-fallback');" /></div>
           <div>
             <div class="side-brand-name">HACK<span>RONIX</span></div>
             <span class="side-caption">LIVE CHAT</span>
@@ -1773,12 +1993,12 @@
           </div>
 
           <div class="top-actions">
-            <button class="icon-btn notify-btn" title="Notifications">
+            <button class="icon-btn notify-btn" onclick="openNotifications()" title="Notifications" aria-label="Notifications">
               ♢
               <span class="notify" id="top-notify">0</span>
             </button>
 
-            <button class="icon-btn theme-btn" onclick="toggleThemeHint()" title="Theme">☾</button>
+            <button class="icon-btn theme-btn" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">☾</button>
 
             <div class="top-user" onclick="openProfile()">
               <div class="avatar" id="current-user-avatar">U</div>
@@ -1825,7 +2045,7 @@
 
       <aside class="sidebar">
         <div class="side-brand">
-          <div class="brand-mark">H</div>
+          <div class="brand-mark logo-mark"><img src="hackronix-logo.png" alt="HACKRONIX logo" onerror="this.style.display='none';this.parentElement.classList.add('logo-fallback');" /></div>
           <div>
             <div class="side-brand-name">HACK<span>RONIX</span></div>
             <span class="side-caption">LIVE CHAT</span>
@@ -1882,8 +2102,8 @@
           </div>
 
           <div class="top-actions">
-            <button class="icon-btn notify-btn">♢</button>
-            <button class="icon-btn theme-btn" onclick="toggleThemeHint()">☾</button>
+            <button class="icon-btn notify-btn" onclick="openNotifications()" title="Notifications" aria-label="Notifications">♢</button>
+            <button class="icon-btn theme-btn" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">☾</button>
 
             <div class="top-user" onclick="openProfile()">
               <div class="avatar" id="chat-current-user-avatar">U</div>
@@ -1958,7 +2178,7 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="side-brand">
-          <div class="brand-mark">H</div>
+          <div class="brand-mark logo-mark"><img src="hackronix-logo.png" alt="HACKRONIX logo" onerror="this.style.display='none';this.parentElement.classList.add('logo-fallback');" /></div>
           <div>
             <div class="side-brand-name">HACK<span>RONIX</span></div>
             <span class="side-caption">LIVE CHAT</span>
@@ -2086,6 +2306,8 @@
     ========================== */
 
     window.addEventListener("DOMContentLoaded", function () {
+      applyTheme();
+
       const savedUser = localStorage.getItem("hackronix-user");
 
       if (!savedUser) return;
@@ -2237,8 +2459,46 @@
         .replaceAll("'", "&#039;");
     }
 
-    function toggleThemeHint() {
-      alert("HACKRONIX Chat is using Dark Mode.");
+    function applyTheme() {
+      const isLight = localStorage.getItem("hackronix-theme") === "light";
+
+      document.body.classList.toggle("light-mode", isLight);
+      document.documentElement.classList.remove("theme-preload-light");
+
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta) themeMeta.content = isLight ? "#f3f6f4" : "#070b0a";
+
+      document.querySelectorAll(".theme-btn").forEach(button => {
+        button.textContent = isLight ? "☀" : "☾";
+        button.setAttribute(
+          "aria-label",
+          isLight ? "Switch to dark mode" : "Switch to light mode"
+        );
+        button.title = isLight ? "Switch to dark mode" : "Switch to light mode";
+      });
+    }
+
+    function toggleTheme() {
+      const isLight = !document.body.classList.contains("light-mode");
+
+      document.body.classList.toggle("light-mode", isLight);
+      document.documentElement.classList.remove("theme-preload-light");
+
+      localStorage.setItem("hackronix-theme", isLight ? "light" : "dark");
+
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta) themeMeta.content = isLight ? "#f3f6f4" : "#070b0a";
+
+      document.querySelectorAll(".theme-btn").forEach(button => {
+        button.textContent = isLight ? "☀" : "☾";
+        button.setAttribute(
+          "aria-label",
+          isLight ? "Switch to dark mode" : "Switch to light mode"
+        );
+        button.title = isLight ? "Switch to dark mode" : "Switch to light mode";
+      });
+
+      showToast(isLight ? "Light mode enabled ☀" : "Dark mode enabled ☾");
     }
 
     function toggleMobileNav() {
@@ -2477,7 +2737,8 @@
           message.sender !== currentUser &&
           message.sender !== currentChatUser
         ) {
-          next[message.sender] = (next[message.sender] || 0) + 1;
+          const senderKey = normalizeUsername(message.sender);
+          next[senderKey] = (next[senderKey] || 0) + 1;
         }
       });
 
@@ -2701,11 +2962,12 @@
       container.innerHTML = entries.map(([key, userData]) => {
         const username = userData.name;
         const profileData = userData.profile || {};
-        const unreadCount = notifications[username] || 0;
+        const unreadCount = notifications[normalizeUsername(username)] || 0;
         const online = true;
 
         return `
-          <div class="user-card" onclick="startChat('${escapeJS(username)}')">
+          <div class="user-card ${unreadCount ? "has-unread" : ""}" onclick="startChat('${escapeJS(username)}')">
+            ${unreadCount ? '<span class="message-alert-dot" title="New message"></span>' : ""}
             <button
               class="favorite-star ${isFavorite(username) ? "active" : ""}"
               onclick="toggleFavorite('${escapeJS(username)}', event)"
@@ -2752,10 +3014,10 @@
       const html = entries.map(([, data]) => {
         const username = data.name;
         const profileData = data.profile || {};
-        const unreadCount = notifications[username] || 0;
+        const unreadCount = notifications[normalizeUsername(username)] || 0;
 
         return `
-          <div class="mini-user" onclick="startChat('${escapeJS(username)}')">
+          <div class="mini-user ${unreadCount ? "has-unread" : ""}" onclick="startChat('${escapeJS(username)}')">
             <div class="avatar">
               ${avatarHTML(username, profileData)}
               <span class="online-dot"></span>
@@ -2792,6 +3054,23 @@
       if (badge) {
         badge.textContent = total > 99 ? "99+" : total;
         badge.style.display = total ? "grid" : "none";
+        badge.classList.toggle("has-alert", total > 0);
+      }
+    }
+
+
+    function openNotifications() {
+      showUsers();
+      const unreadUsers = Object.keys(notifications);
+
+      if (unreadUsers.length) {
+        showToast(
+          unreadUsers.length === 1
+            ? `New message from ${unreadUsers[0]} 🔴`
+            : `${unreadUsers.length} chats have new messages 🔴`
+        );
+      } else {
+        showToast("No new messages.");
       }
     }
 
@@ -2908,10 +3187,10 @@
 
       document.getElementById("chat-username").textContent = username;
 
-      delete notifications[username];
+      delete notifications[normalizeUsername(username)];
       updateNotificationBadge();
 
-      const user = allUsersCache[username];
+      const user = allUsersCache[usernameKey(username)];
 
       if (user && user.profile) {
         updateAvatar("chat-user-avatar", username, user.profile);
