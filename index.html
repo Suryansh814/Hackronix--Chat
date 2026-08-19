@@ -3009,6 +3009,7 @@
         ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
         iv: bytesToBase64(iv),
         senderPublicKey: e2eePublicJwk,
+        recipientPublicKey: recipientPublicJwk,
         encryption: "E2EE-v2-AES-256-GCM"
       };
     }
@@ -3023,17 +3024,15 @@
       const candidates = [];
       const seen = new Set();
 
-      // Try the current username's key first.
+      // Keep the current user's private key first, then retained identities.
       if (e2eePrivateKey) {
         candidates.push(e2eePrivateKey);
         try {
           const jwk = await crypto.subtle.exportKey("jwk", e2eePrivateKey);
-          seen.add(jwk.d);
+          if (jwk?.d) seen.add(jwk.d);
         } catch (_) {}
       }
 
-      // Then try retained old identities. This makes key rotation/migration
-      // recoverable on the same browser when the old private key still exists.
       for (const record of Object.values(e2eeKeyring || {})) {
         if (!record?.privateKey) continue;
         if (seen.has(record.privateKey.d)) continue;
@@ -3049,11 +3048,42 @@
         } catch (_) {}
       }
 
+      /*
+       * IMPORTANT:
+       * A sender encrypts with the recipient's public key. Therefore the
+       * sender must decrypt its own outgoing message with the RECIPIENT's
+       * public key + the sender's private key. The recipient decrypts with
+       * the SENDER's public key + the recipient's private key.
+       *
+       * Older messages did not store recipientPublicKey, so fall back to the
+       * currently published key for that username when it is available.
+       */
+      let peerPublicJwk = null;
+
+      if (message.sender === currentUser) {
+        peerPublicJwk =
+          message.recipientPublicKey ||
+          e2eePublicKeys[usernameKey(message.receiver)]?.publicKey ||
+          null;
+      } else {
+        peerPublicJwk = message.senderPublicKey || null;
+      }
+
+      if (!peerPublicJwk) {
+        return {
+          ...message,
+          text: message.sender === currentUser
+            ? "Message sent. Encryption key for this chat is currently unavailable."
+            : "🔒 Unable to decrypt this message on this device.",
+          decryptionFailed: true
+        };
+      }
+
       let lastError = null;
 
       for (const privateKey of candidates) {
         try {
-          const key = await deriveE2EEChatKey(message.senderPublicKey, privateKey);
+          const key = await deriveE2EEChatKey(peerPublicJwk, privateKey);
           const plaintext = await crypto.subtle.decrypt(
             { name: "AES-GCM", iv: base64ToBytes(message.iv) },
             key,
@@ -3644,67 +3674,98 @@
       if (!currentUser) return;
 
       const username = currentUser;
-      const updates = {};
+      const usernamePath = usernameKey(username);
 
+      // Detach listeners first so the UI stops doing work immediately.
       try {
-        const snapshot = await database.ref("messages").once("value");
-        const messages = snapshot.val() || {};
+        database.ref("activeUsers").off();
+        database.ref("userKeys").off();
+        database.ref("messages").off();
+        database.ref("communityMessages").off();
+        database.ref(".info/connected").off();
+      } catch (_) {}
 
-        /*
-         * Remove every personal message belonging to this user.
-         * This makes the user's personal chat history disappear when
-         * they log out, as requested.
-         */
-        Object.keys(messages).forEach(key => {
-          const message = messages[key];
+      // Clear the visible session immediately. Do NOT wait for Firebase.
+      currentUser = "";
+      currentChatUser = null;
+      userProfile = {};
+      e2eePrivateKey = null;
+      e2eePublicKey = null;
+      e2eePublicJwk = null;
+      e2eeReadyPromise = null;
+      e2eeReadyUsername = "";
+      e2eeKeyring = {};
+      chats = {};
+      messageSent = {};
+      notifications = {};
+      allUsersCache = {};
+      favoriteUsers = loadFavorites();
+      isCommunityChat = false;
 
-          if (
-            message &&
-            (message.sender === username || message.receiver === username)
-          ) {
-            updates["messages/" + key] = null;
+      localStorage.removeItem("hackronix-user");
+
+      ["users-screen", "chat-screen", "profile-screen"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove("active");
+      });
+
+      const loginScreen = document.getElementById("login-screen");
+      if (loginScreen) loginScreen.style.display = "flex";
+
+      const usernameInput = document.getElementById("username");
+      if (usernameInput) usernameInput.value = "";
+
+      showToast("Logged out ✓");
+
+      // Release the username/key immediately. This request is intentionally
+      // fire-and-forget so the login screen never waits for Firebase.
+      database.ref().update({
+        ["activeUsers/" + usernamePath]: null,
+        ["userKeys/" + usernamePath]: null
+      }).catch(() => {});
+
+      // Firebase message cleanup continues in the background. The user does
+      // not wait for a full messages scan before seeing the login screen.
+      (async () => {
+        try {
+          const snapshot = await database.ref("messages").once("value");
+          const messages = snapshot.val() || {};
+          const updates = {};
+
+          Object.keys(messages).forEach(key => {
+            const message = messages[key];
+            if (
+              message &&
+              (message.sender === username || message.receiver === username)
+            ) {
+              updates["messages/" + key] = null;
+            }
+          });
+
+          updates["activeUsers/" + usernamePath] = null;
+          updates["userKeys/" + usernamePath] = null;
+
+          // If the same username has already logged back in, do not delete
+          // messages that may have been created by the new session.
+          const activeUsername = currentUser;
+          if (activeUsername && normalizeUsername(activeUsername) === normalizeUsername(username)) {
+            return;
           }
-        });
 
-        updates["activeUsers/" + usernameKey(username)] = null;
-        updates["userKeys/" + usernameKey(username)] = null;
+          if (Object.keys(updates).length) {
+            await database.ref().update(updates);
+          }
+        } catch (error) {
+          // Logout already completed locally. Cleanup failure should not trap
+          // the user on the chat screen.
+          console.warn("Background logout cleanup failed:", error);
+        }
 
-        await database.ref().update(updates);
-
-        // End the anonymous Firebase session. The next login silently
-        // creates/reuses an anonymous Firebase account again.
-        await auth.signOut();
+        try {
+          await auth.signOut();
+        } catch (_) {}
         firebaseAuthReadyPromise = null;
-
-        localStorage.removeItem("hackronix-user");
-
-        currentUser = "";
-        currentChatUser = null;
-        userProfile = {};
-        e2eePrivateKey = null;
-        e2eePublicKey = null;
-        e2eePublicJwk = null;
-        e2eeReadyPromise = null;
-        e2eeReadyUsername = "";
-        e2eeKeyring = {};
-        chats = {};
-        messageSent = {};
-        notifications = {};
-        allUsersCache = {};
-        favoriteUsers = loadFavorites();
-
-        ["users-screen", "chat-screen", "profile-screen"].forEach(id => {
-          document.getElementById(id).classList.remove("active");
-        });
-
-        document.getElementById("username").value = "";
-        document.getElementById("login-screen").style.display = "flex";
-
-        showToast("Logged out. Chat history cleared ✓");
-      } catch (error) {
-        console.error("Logout failed:", error);
-        showToast("Logout failed. Please try again.", true);
-      }
+      })();
     }
 
     /* =========================
@@ -4162,7 +4223,8 @@
           encryption: encrypted.encryption,
           ciphertext: encrypted.ciphertext,
           iv: encrypted.iv,
-          senderPublicKey: encrypted.senderPublicKey
+          senderPublicKey: encrypted.senderPublicKey,
+          recipientPublicKey: encrypted.recipientPublicKey
         };
 
         input.value = "";
