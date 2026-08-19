@@ -1809,18 +1809,22 @@
       .mobile-sidebar-backdrop {
         position: fixed;
         inset: 0;
-        z-index: 9990;
+        z-index: 999;
         background: rgba(0,0,0,.58);
-        /* Do NOT blur the drawer itself. */
-        backdrop-filter: none;
+        backdrop-filter: none !important;
+        filter: none !important;
+        pointer-events: none;
       }
 
-      .mobile-sidebar-backdrop.show { display: block; }
+      .mobile-sidebar-backdrop.show {
+        display: block;
+        pointer-events: auto;
+      }
 
       .sidebar.mobile-open {
         display: flex !important;
         position: fixed !important;
-        z-index: 10000 !important;
+        z-index: 1001 !important;
         top: 0 !important;
         left: 0 !important;
         bottom: 0 !important;
@@ -2770,6 +2774,7 @@
     let favoriteUsers = loadFavorites();
     let isCommunityChat = false;
     let communityMessages = {};
+    let pendingFileMessages = {};
 
     /* =========================
        INIT
@@ -2982,7 +2987,16 @@
 
       if (!sidebar || !backdrop) return;
 
-      const open = sidebar.classList.toggle("mobile-open");
+      // Keep the overlay inside the same app-shell stacking context as the
+      // sidebar. This prevents the overlay from sitting above the drawer and
+      // making every drawer button feel blurred/un-clickable on Android.
+      const shell = sidebar.closest(".app-shell");
+      if (shell && backdrop.parentElement !== shell) {
+        shell.appendChild(backdrop);
+      }
+
+      const open = !sidebar.classList.contains("mobile-open");
+      sidebar.classList.toggle("mobile-open", open);
       backdrop.classList.toggle("show", open);
       backdrop.setAttribute("aria-hidden", open ? "false" : "true");
       document.body.classList.toggle("mobile-nav-open", open);
@@ -3722,7 +3736,17 @@
       `;
 
       const chatId = getChatId(currentUser, username);
-      const messages = chats[chatId] || [];
+      const messages = [...(chats[chatId] || [])];
+      const pending = Object.values(pendingFileMessages[chatId] || {});
+
+      if (pending.length) {
+        messages.push(...pending);
+        messages.sort((a, b) => {
+          const ta = typeof a.timestamp === "number" ? a.timestamp : Date.now();
+          const tb = typeof b.timestamp === "number" ? b.timestamp : Date.now();
+          return ta - tb;
+        });
+      }
 
       if (messages.length === 0) {
         container.insertAdjacentHTML("beforeend", `
@@ -3790,6 +3814,9 @@
       const container = document.getElementById("chat-messages");
       const msg = document.createElement("div");
       msg.className = `message ${type}`;
+      if (messageData?.tempFileId) {
+        msg.dataset.tempFileId = messageData.tempFileId;
+      }
 
       let timeStr = "";
 
@@ -3880,28 +3907,47 @@
         return;
       }
 
+      const chatId = getChatId(currentUser, currentChatUser);
+      const tempFileId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const localUrl = URL.createObjectURL(file);
+
       /*
-       * Files were previously stored as base64 directly inside Realtime
-       * Database messages. That makes the chat bubble enormous and is the
-       * reason large files looked broken. Now the binary file lives in
-       * Firebase Storage and RTDB stores only its URL + metadata.
+       * Optimistic UI:
+       * The file card appears immediately on the sender's screen. Firebase
+       * Storage upload continues in the background. Only the final download
+       * URL + metadata is written to Realtime Database, so the old giant
+       * base64 message can never be created.
        */
-      const fileInfo = document.getElementById("file-info");
-      if (fileInfo) {
-        fileInfo.textContent =
-          `Uploading ${file.name} (${formatFileSize(file.size)})...`;
-      }
+      const pendingMessage = {
+        id: tempFileId,
+        tempFileId,
+        sender: currentUser,
+        receiver: currentChatUser,
+        text: "",
+        timestamp: Date.now(),
+        isFile: true,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type || "application/octet-stream",
+        fileUrl: localUrl,
+        pending: true
+      };
+
+      if (!pendingFileMessages[chatId]) pendingFileMessages[chatId] = {};
+      pendingFileMessages[chatId][tempFileId] = pendingMessage;
+
+      // Draw it immediately. No "Uploading..." banner.
+      displayMessages(currentChatUser);
+      event.target.value = "";
 
       try {
         const safeName = file.name
           .replace(/[^a-zA-Z0-9._-]/g, "_")
           .slice(-120);
 
-        const chatId = getChatId(currentUser, currentChatUser);
-        const storagePath =
-          `chatFiles/${chatId}/${Date.now()}_${safeName}`;
-
+        const storagePath = `chatFiles/${chatId}/${Date.now()}_${safeName}`;
         const storageRef = storage.ref(storagePath);
+
         const snapshot = await storageRef.put(file, {
           contentType: file.type || "application/octet-stream",
           cacheControl: "public,max-age=31536000"
@@ -3918,18 +3964,30 @@
           fileName: file.name,
           fileSize: file.size,
           fileType: file.type || "application/octet-stream",
-          fileUrl: fileUrl,
-          storagePath: storagePath
+          fileUrl,
+          storagePath
         };
 
         await database.ref("messages").push(messageData);
 
-        if (fileInfo) fileInfo.textContent = "";
+        delete pendingFileMessages[chatId][tempFileId];
+        if (!Object.keys(pendingFileMessages[chatId]).length) {
+          delete pendingFileMessages[chatId];
+        }
+
+        URL.revokeObjectURL(localUrl);
+        displayMessages(currentChatUser);
         showToast("File sent ✓");
       } catch (error) {
         console.error("File upload failed:", error);
 
-        if (fileInfo) fileInfo.textContent = "";
+        delete pendingFileMessages[chatId][tempFileId];
+        if (!Object.keys(pendingFileMessages[chatId]).length) {
+          delete pendingFileMessages[chatId];
+        }
+
+        URL.revokeObjectURL(localUrl);
+        displayMessages(currentChatUser);
 
         if (
           error &&
@@ -3940,8 +3998,6 @@
         } else {
           showToast("File could not be sent. Try again.", true);
         }
-      } finally {
-        event.target.value = "";
       }
     }
 
