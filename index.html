@@ -2255,32 +2255,40 @@
 
     /* FINAL MOBILE OVERRIDES — intentionally scoped to chat only */
     @media (max-width: 760px) {
+      :root {
+        --hackronix-composer-height: 56px;
+      }
+
       #chat-screen .chat-composer {
-        height: var(--hackronix-composer-height) !important;
-        min-height: var(--hackronix-composer-height) !important;
-        padding: 7px 10px !important;
+        height: 56px !important;
+        min-height: 56px !important;
+        padding: 4px 10px !important;
       }
 
       #chat-screen .composer {
-        height: 50px !important;
-        min-height: 50px !important;
-        padding: 5px 6px !important;
+        height: 48px !important;
+        min-height: 48px !important;
+        padding: 4px 6px !important;
       }
 
       #chat-screen .composer-btn {
-        width: 34px !important;
-        height: 34px !important;
-        flex-basis: 34px !important;
+        width: 32px !important;
+        height: 32px !important;
+        flex-basis: 32px !important;
       }
 
       #chat-screen .send-btn {
-        width: 42px !important;
-        height: 42px !important;
-        flex-basis: 42px !important;
+        width: 40px !important;
+        height: 40px !important;
+        flex-basis: 40px !important;
+      }
+
+      #chat-screen .composer input {
+        height: 38px !important;
       }
 
       #chat-screen .chat-messages {
-        bottom: calc(var(--hackronix-composer-height) + var(--hackronix-keyboard-offset, 0px)) !important;
+        bottom: calc(56px + var(--hackronix-keyboard-offset, 0px)) !important;
       }
 
       #chat-screen .chat-head {
@@ -2795,9 +2803,15 @@
     let e2eePublicKey = null;
     let e2eePublicJwk = null;
     let e2eeReadyPromise = null;
+    let e2eeReadyUsername = "";
     let e2eePublicKeys = {};
+    let e2eeKeyring = {};
 
-    const E2EE_KEY_STORAGE = "hackronix-e2ee-keypair-v1";
+    // v2 keeps a separate E2EE identity for every username on this browser.
+    // The old v1 key is migrated instead of being discarded, so existing
+    // messages are not unnecessarily broken.
+    const E2EE_KEY_STORAGE = "hackronix-e2ee-keypairs-v2";
+    const E2EE_LEGACY_STORAGE = "hackronix-e2ee-keypair-v1";
     const E2EE_SALT = new TextEncoder().encode("HACKRONIX-E2EE-v1");
     const E2EE_INFO = new TextEncoder().encode("HACKRONIX-PRIVATE-CHAT");
 
@@ -2817,53 +2831,109 @@
       return bytes;
     }
 
-    async function ensureE2EEIdentity() {
-      if (e2eeReadyPromise) return e2eeReadyPromise;
+    function e2eeUsernameId(username) {
+      return normalizeUsername(username || "");
+    }
 
+    function loadE2EEKeyring() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(E2EE_KEY_STORAGE) || "{}");
+        return saved && typeof saved === "object" ? saved : {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function saveE2EEKeyring() {
+      localStorage.setItem(E2EE_KEY_STORAGE, JSON.stringify(e2eeKeyring));
+    }
+
+    async function importE2EEKeyPair(record) {
+      const privateKey = await crypto.subtle.importKey(
+        "jwk", record.privateKey,
+        { name: "ECDH", namedCurve: "P-256" },
+        true, ["deriveBits"]
+      );
+
+      const publicKey = await crypto.subtle.importKey(
+        "jwk", record.publicKey,
+        { name: "ECDH", namedCurve: "P-256" },
+        true, []
+      );
+
+      return { privateKey, publicKey };
+    }
+
+    async function createE2EEKeyPairRecord() {
+      const pair = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveBits"]
+      );
+
+      return {
+        version: 2,
+        privateKey: await crypto.subtle.exportKey("jwk", pair.privateKey),
+        publicKey: await crypto.subtle.exportKey("jwk", pair.publicKey)
+      };
+    }
+
+    async function ensureE2EEIdentity() {
+      const usernameId = e2eeUsernameId(currentUser);
+      if (!usernameId) {
+        throw new Error("Username is required for secure chat.");
+      }
+
+      if (e2eeReadyPromise && e2eeReadyUsername === usernameId) {
+        return e2eeReadyPromise;
+      }
+
+      e2eeReadyUsername = usernameId;
       e2eeReadyPromise = (async () => {
         if (!window.crypto?.subtle) {
           throw new Error("Web Crypto is unavailable. Open HACKRONIX over HTTPS.");
         }
 
-        let saved = null;
-        try {
-          saved = JSON.parse(localStorage.getItem(E2EE_KEY_STORAGE) || "null");
-        } catch (_) {}
+        e2eeKeyring = loadE2EEKeyring();
 
-        if (saved?.privateKey && saved?.publicKey) {
-          e2eePrivateKey = await crypto.subtle.importKey(
-            "jwk", saved.privateKey,
-            { name: "ECDH", namedCurve: "P-256" },
-            true, ["deriveBits"]
-          );
-          e2eePublicKey = await crypto.subtle.importKey(
-            "jwk", saved.publicKey,
-            { name: "ECDH", namedCurve: "P-256" },
-            true, []
-          );
-          e2eePublicJwk = saved.publicKey;
-          return;
+        let record = e2eeKeyring[usernameId];
+
+        // One-time migration from the previous single-key storage.
+        if (!record) {
+          try {
+            const legacy = JSON.parse(
+              localStorage.getItem(E2EE_LEGACY_STORAGE) || "null"
+            );
+
+            if (legacy?.privateKey && legacy?.publicKey) {
+              record = {
+                version: 2,
+                privateKey: legacy.privateKey,
+                publicKey: legacy.publicKey,
+                migratedFromV1: true
+              };
+              // The old unscoped key must not be reused by another username.
+              localStorage.removeItem(E2EE_LEGACY_STORAGE);
+            }
+          } catch (_) {}
         }
 
-        const pair = await crypto.subtle.generateKey(
-          { name: "ECDH", namedCurve: "P-256" },
-          true,
-          ["deriveBits"]
-        );
+        if (!record?.privateKey || !record?.publicKey) {
+          record = await createE2EEKeyPairRecord();
+        }
 
-        const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
-        const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+        e2eeKeyring[usernameId] = record;
+        saveE2EEKeyring();
 
-        localStorage.setItem(E2EE_KEY_STORAGE, JSON.stringify({
-          version: 1,
-          privateKey: privateJwk,
-          publicKey: publicJwk
-        }));
-
-        e2eePrivateKey = pair.privateKey;
-        e2eePublicKey = pair.publicKey;
-        e2eePublicJwk = publicJwk;
-      })();
+        const imported = await importE2EEKeyPair(record);
+        e2eePrivateKey = imported.privateKey;
+        e2eePublicKey = imported.publicKey;
+        e2eePublicJwk = record.publicKey;
+      })().catch(error => {
+        e2eeReadyPromise = null;
+        e2eeReadyUsername = "";
+        throw error;
+      });
 
       return e2eeReadyPromise;
     }
@@ -2877,16 +2947,18 @@
         publicKey: e2eePublicJwk,
         uid: auth.currentUser?.uid || "",
         algorithm: "ECDH-P256-HKDF-SHA256-AES-256-GCM",
-        version: 1,
+        version: 2,
         updatedAt: firebase.database.ServerValue.TIMESTAMP
       });
     }
 
-    async function deriveE2EEChatKey(peerPublicJwk) {
+    async function deriveE2EEChatKey(peerPublicJwk, privateKeyOverride = null) {
       await ensureE2EEIdentity();
 
-      if (!peerPublicJwk || !e2eePrivateKey) {
-        throw new Error("Recipient encryption key is unavailable.");
+      const privateKey = privateKeyOverride || e2eePrivateKey;
+
+      if (!peerPublicJwk || !privateKey) {
+        throw new Error("Encryption key is unavailable.");
       }
 
       const peerPublicKey = await crypto.subtle.importKey(
@@ -2897,7 +2969,7 @@
 
       const sharedBits = await crypto.subtle.deriveBits(
         { name: "ECDH", public: peerPublicKey },
-        e2eePrivateKey,
+        privateKey,
         256
       );
 
@@ -2915,6 +2987,8 @@
     }
 
     async function encryptPrivateMessage(plainText, recipientUsername) {
+      await ensureE2EEIdentity();
+
       const recipientRecord = e2eePublicKeys[usernameKey(recipientUsername)];
       const recipientPublicJwk = recipientRecord?.publicKey;
 
@@ -2935,7 +3009,7 @@
         ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
         iv: bytesToBase64(iv),
         senderPublicKey: e2eePublicJwk,
-        encryption: "E2EE-v1-AES-256-GCM"
+        encryption: "E2EE-v2-AES-256-GCM"
       };
     }
 
@@ -2944,27 +3018,64 @@
         return message;
       }
 
-      try {
-        const key = await deriveE2EEChatKey(message.senderPublicKey);
-        const plaintext = await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: base64ToBytes(message.iv) },
-          key,
-          base64ToBytes(message.ciphertext)
-        );
+      await ensureE2EEIdentity();
 
-        return {
-          ...message,
-          text: new TextDecoder().decode(plaintext),
-          decryptionFailed: false
-        };
-      } catch (error) {
-        console.error("E2EE decrypt failed:", error);
-        return {
-          ...message,
-          text: "🔒 Unable to decrypt this message on this device.",
-          decryptionFailed: true
-        };
+      const candidates = [];
+      const seen = new Set();
+
+      // Try the current username's key first.
+      if (e2eePrivateKey) {
+        candidates.push(e2eePrivateKey);
+        try {
+          const jwk = await crypto.subtle.exportKey("jwk", e2eePrivateKey);
+          seen.add(jwk.d);
+        } catch (_) {}
       }
+
+      // Then try retained old identities. This makes key rotation/migration
+      // recoverable on the same browser when the old private key still exists.
+      for (const record of Object.values(e2eeKeyring || {})) {
+        if (!record?.privateKey) continue;
+        if (seen.has(record.privateKey.d)) continue;
+
+        try {
+          const key = await crypto.subtle.importKey(
+            "jwk", record.privateKey,
+            { name: "ECDH", namedCurve: "P-256" },
+            true, ["deriveBits"]
+          );
+          candidates.push(key);
+          seen.add(record.privateKey.d);
+        } catch (_) {}
+      }
+
+      let lastError = null;
+
+      for (const privateKey of candidates) {
+        try {
+          const key = await deriveE2EEChatKey(message.senderPublicKey, privateKey);
+          const plaintext = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: base64ToBytes(message.iv) },
+            key,
+            base64ToBytes(message.ciphertext)
+          );
+
+          return {
+            ...message,
+            text: new TextDecoder().decode(plaintext),
+            decryptionFailed: false
+          };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      console.error("E2EE decrypt failed:", lastError);
+      return {
+        ...message,
+        text: "🔒 Unable to decrypt this message on this device.",
+        decryptionFailed: true
+      };
     }
 
     /* =========================
@@ -3570,6 +3681,12 @@
         currentUser = "";
         currentChatUser = null;
         userProfile = {};
+        e2eePrivateKey = null;
+        e2eePublicKey = null;
+        e2eePublicJwk = null;
+        e2eeReadyPromise = null;
+        e2eeReadyUsername = "";
+        e2eeKeyring = {};
         chats = {};
         messageSent = {};
         notifications = {};
