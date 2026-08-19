@@ -1798,6 +1798,118 @@
       }
     }
 
+
+    /* MOBILE DRAWER + CHAT UX */
+    .mobile-sidebar-backdrop { display: none; }
+
+    @media (max-width: 760px) {
+      .mobile-sidebar-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 90;
+        background: rgba(0,0,0,.52);
+        backdrop-filter: blur(2px);
+      }
+      .mobile-sidebar-backdrop.show { display: block; }
+
+      .sidebar.mobile-open {
+        display: flex;
+        position: fixed;
+        z-index: 100;
+        inset: 0 auto 0 0;
+        width: min(300px, 84vw);
+        max-width: 84vw;
+        padding: 18px 14px;
+        overflow-y: auto;
+        background: rgba(7,12,10,.985);
+        box-shadow: 24px 0 60px rgba(0,0,0,.42);
+        animation: mobileSidebarIn .18s ease-out;
+      }
+
+      body.light-mode .sidebar.mobile-open {
+        background: rgba(255,255,255,.985);
+      }
+
+      @keyframes mobileSidebarIn {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(0); }
+      }
+
+      .mobile-menu {
+        position: relative;
+        z-index: 110;
+        flex: 0 0 36px;
+      }
+
+      #chat-screen .topbar {
+        position: relative;
+        z-index: 80;
+        flex: 0 0 62px;
+      }
+
+      #chat-screen .chat-layout {
+        min-height: 0;
+        height: calc(100dvh - 62px);
+      }
+
+      #chat-screen .chat-head {
+        position: relative;
+        z-index: 70;
+        flex: 0 0 67px;
+        min-height: 67px;
+      }
+
+      #chat-screen .chat-messages {
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        padding-bottom: 105px;
+      }
+
+      /* Prevent browser zoom when typing on mobile. */
+      #chat-screen #message-input {
+        min-width: 0;
+        font-size: 16px;
+        line-height: 1.25;
+        -webkit-text-size-adjust: 100%;
+      }
+
+      /* Composer stays with the keyboard/visual viewport. */
+      #chat-screen .chat-composer {
+        position: fixed;
+        z-index: 75;
+        left: 0;
+        right: 0;
+        bottom: var(--hackronix-keyboard-offset, 0px);
+        padding: 8px 9px calc(9px + env(safe-area-inset-bottom));
+        background: rgba(8,14,11,.97);
+        backdrop-filter: blur(18px);
+        transition: bottom .08s linear;
+      }
+
+      body.light-mode #chat-screen .chat-composer {
+        background: rgba(255,255,255,.97);
+      }
+
+      #chat-screen .composer {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      /* Hide only Search; keep Call and Save. */
+      #chat-screen .chat-actions button[title="Search"] { display: none; }
+      #chat-screen .chat-actions .icon-btn { display: grid; }
+
+      #chat-screen .chat-head-info { overflow: hidden; }
+      #chat-screen .chat-name,
+      #chat-screen .chat-status {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
     @media (max-width: 1000px) {
       :root { --sidebar: 235px; }
 
@@ -1899,7 +2011,7 @@
         display: grid;
       }
 
-      .chat-actions .hide-mobile {
+      .chat-actions button[title="Search"] {
         display: none;
       }
 
@@ -2275,7 +2387,7 @@
 
       <main class="main">
         <header class="topbar">
-          <button class="icon-btn mobile-menu" onclick="backToUsers()">←</button>
+          <button class="icon-btn mobile-menu" onclick="toggleMobileNav()" aria-label="Open menu" title="Menu">☰</button>
 
           <div class="search-box">
             <span class="search-symbol">⌕</span>
@@ -2309,7 +2421,7 @@
 
             <div class="chat-actions">
               <button class="icon-btn hide-mobile" title="Search">⌕</button>
-              <button class="icon-btn hide-mobile" id="voice-call-btn" onclick="startVoiceCall()" title="Voice Call" aria-label="Voice Call">☎</button>
+              <button class="icon-btn" id="voice-call-btn" onclick="startVoiceCall()" title="Voice Call" aria-label="Voice Call">☎</button>
               <button class="icon-btn" onclick="saveChat()" title="Save Chat">↓</button>
             </div>
           </div>
@@ -2545,6 +2657,8 @@
     }
 
     function showScreen(id) {
+      closeMobileNav();
+
       ["users-screen", "chat-screen", "profile-screen"].forEach(screen => {
         document.getElementById(screen).classList.remove("active");
       });
@@ -2683,10 +2797,36 @@
     }
 
     function toggleMobileNav() {
-      showUsers();
+      const activeScreen = document.querySelector(
+        "#users-screen.active, #chat-screen.active, #profile-screen.active"
+      );
+      const sidebar = activeScreen?.querySelector(".sidebar");
+      const backdrop = document.getElementById("mobile-sidebar-backdrop");
+
+      if (!sidebar || !backdrop) return;
+
+      const open = sidebar.classList.toggle("mobile-open");
+      backdrop.classList.toggle("show", open);
+      backdrop.setAttribute("aria-hidden", open ? "false" : "true");
+      document.body.classList.toggle("mobile-nav-open", open);
+    }
+
+    function closeMobileNav() {
+      document.querySelectorAll(".sidebar.mobile-open").forEach(sidebar => {
+        sidebar.classList.remove("mobile-open");
+      });
+
+      const backdrop = document.getElementById("mobile-sidebar-backdrop");
+      if (backdrop) {
+        backdrop.classList.remove("show");
+        backdrop.setAttribute("aria-hidden", "true");
+      }
+
+      document.body.classList.remove("mobile-nav-open");
     }
 
     function focusUsersSearch() {
+      closeMobileNav();
       showUsers();
       setTimeout(() => {
         const input = document.getElementById("user-search");
@@ -3397,6 +3537,9 @@
       const container = document.getElementById("chat-messages");
       if (!container) return;
 
+      const wasNearBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < 140;
+
       container.innerHTML = `
         <div class="date-chip">LIVE CONVERSATION</div>
       `;
@@ -3423,7 +3566,9 @@
         });
       }
 
-      container.scrollTop = container.scrollHeight;
+      if (wasNearBottom || !container.dataset.userScrolled) {
+        container.scrollTop = container.scrollHeight;
+      }
     }
 
     function sendMessage() {
@@ -3766,6 +3911,70 @@
       URL.revokeObjectURL(url);
       showToast("Chat saved successfully ✓");
     }
+
+
+    /* MOBILE KEYBOARD VIEWPORT */
+    (function setupMobileKeyboardViewport() {
+      const root = document.documentElement;
+      const vv = window.visualViewport;
+      if (!vv) return;
+
+      function updateKeyboardOffset() {
+        if (!window.matchMedia("(max-width: 760px)").matches) {
+          root.style.setProperty("--hackronix-keyboard-offset", "0px");
+          return;
+        }
+
+        const visibleBottom = vv.height + vv.offsetTop;
+        const keyboardHeight = Math.max(0, window.innerHeight - visibleBottom);
+        const open = keyboardHeight > 90;
+
+        root.style.setProperty(
+          "--hackronix-keyboard-offset",
+          `${Math.round(open ? keyboardHeight : 0)}px`
+        );
+
+        document.body.classList.toggle("keyboard-open", open);
+
+        if (open && currentChatUser) {
+          requestAnimationFrame(() => {
+            const box = document.getElementById("chat-messages");
+            if (box) box.scrollTop = box.scrollHeight;
+          });
+        }
+      }
+
+      vv.addEventListener("resize", updateKeyboardOffset);
+      vv.addEventListener("scroll", updateKeyboardOffset);
+      window.addEventListener("resize", updateKeyboardOffset);
+
+      document.addEventListener("focusin", event => {
+        if (event.target?.id === "message-input") {
+          setTimeout(updateKeyboardOffset, 80);
+          setTimeout(updateKeyboardOffset, 250);
+        }
+      });
+
+      document.addEventListener("focusout", event => {
+        if (event.target?.id === "message-input") {
+          setTimeout(updateKeyboardOffset, 120);
+        }
+      });
+
+      updateKeyboardOffset();
+    })();
+
+
+    (function setupChatScrollState() {
+      const container = document.getElementById("chat-messages");
+      if (!container) return;
+
+      container.addEventListener("scroll", () => {
+        const distance =
+          container.scrollHeight - container.scrollTop - container.clientHeight;
+        container.dataset.userScrolled = distance > 140 ? "true" : "false";
+      }, { passive: true });
+    })();
 
     /* =========================
        KEYBOARD / CLEANUP
@@ -4504,7 +4713,9 @@
 
   <audio id="voice-call-audio" autoplay playsinline></audio>
 
-<div id="toast" class="toast"></div>
+<div id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop"
+     onclick="closeMobileNav()" aria-hidden="true"></div>
+  <div id="toast" class="toast"></div>
 
 </body>
 </html>
