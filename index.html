@@ -1985,79 +1985,6 @@
         text-overflow: ellipsis;
       }
 
-      /* Desktop file cards: compact, clean and usable. */
-      #chat-screen .message.file-message {
-        max-width: min(430px, 72%);
-        padding: 8px;
-      }
-
-      #chat-screen .file-card {
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        min-width: 260px;
-        max-width: 410px;
-      }
-
-      #chat-screen .file-icon {
-        width: 42px;
-        height: 42px;
-        flex: 0 0 42px;
-        display: grid;
-        place-items: center;
-        border-radius: 10px;
-        background: rgba(49,242,123,.12);
-        color: var(--green);
-        font-size: 19px;
-      }
-
-      #chat-screen .file-meta {
-        min-width: 0;
-        flex: 1;
-      }
-
-      #chat-screen .file-name {
-        font-size: 12px;
-        font-weight: 800;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      #chat-screen .file-size {
-        margin-top: 3px;
-        color: var(--muted);
-        font-size: 9px;
-      }
-
-      #chat-screen .file-download {
-        width: 34px;
-        height: 34px;
-        flex: 0 0 34px;
-        display: grid;
-        place-items: center;
-        border: 0;
-        border-radius: 50%;
-        background: var(--green);
-        color: #041007;
-        font-weight: 900;
-        font-size: 17px;
-        cursor: pointer;
-        box-shadow: 0 4px 14px rgba(49,242,123,.18);
-      }
-
-      #chat-screen .file-download:disabled {
-        opacity: .45;
-        cursor: not-allowed;
-        box-shadow: none;
-      }
-
-      #chat-screen .file-status {
-        margin-top: 4px;
-        color: var(--muted);
-        font-size: 8px;
-      }
-
       /* Compact WhatsApp-style file cards. */
       #chat-screen .message.file-message {
         max-width: 78%;
@@ -2850,6 +2777,187 @@
     let pendingFileMessages = {};
 
     /* =========================
+       E2EE
+       Private 1-to-1 messages use Web Crypto (ECDH P-256 + HKDF + AES-GCM).
+       Private keys never leave this browser. Firebase stores only ciphertext,
+       IV and public-key material.
+    ========================== */
+    let e2eePrivateKey = null;
+    let e2eePublicKey = null;
+    let e2eePublicJwk = null;
+    let e2eeReadyPromise = null;
+    let e2eePublicKeys = {};
+
+    const E2EE_KEY_STORAGE = "hackronix-e2ee-keypair-v1";
+    const E2EE_SALT = new TextEncoder().encode("HACKRONIX-E2EE-v1");
+    const E2EE_INFO = new TextEncoder().encode("HACKRONIX-PRIVATE-CHAT");
+
+    function bytesToBase64(bytes) {
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    function base64ToBytes(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+
+    async function ensureE2EEIdentity() {
+      if (e2eeReadyPromise) return e2eeReadyPromise;
+
+      e2eeReadyPromise = (async () => {
+        if (!window.crypto?.subtle) {
+          throw new Error("Web Crypto is unavailable. Open HACKRONIX over HTTPS.");
+        }
+
+        let saved = null;
+        try {
+          saved = JSON.parse(localStorage.getItem(E2EE_KEY_STORAGE) || "null");
+        } catch (_) {}
+
+        if (saved?.privateKey && saved?.publicKey) {
+          e2eePrivateKey = await crypto.subtle.importKey(
+            "jwk", saved.privateKey,
+            { name: "ECDH", namedCurve: "P-256" },
+            true, ["deriveBits"]
+          );
+          e2eePublicKey = await crypto.subtle.importKey(
+            "jwk", saved.publicKey,
+            { name: "ECDH", namedCurve: "P-256" },
+            true, []
+          );
+          e2eePublicJwk = saved.publicKey;
+          return;
+        }
+
+        const pair = await crypto.subtle.generateKey(
+          { name: "ECDH", namedCurve: "P-256" },
+          true,
+          ["deriveBits"]
+        );
+
+        const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+        const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+
+        localStorage.setItem(E2EE_KEY_STORAGE, JSON.stringify({
+          version: 1,
+          privateKey: privateJwk,
+          publicKey: publicJwk
+        }));
+
+        e2eePrivateKey = pair.privateKey;
+        e2eePublicKey = pair.publicKey;
+        e2eePublicJwk = publicJwk;
+      })();
+
+      return e2eeReadyPromise;
+    }
+
+    async function publishE2EEPublicKey() {
+      await ensureE2EEIdentity();
+      if (!currentUser || !e2eePublicJwk) return;
+
+      await database.ref("userKeys/" + usernameKey(currentUser)).set({
+        username: currentUser,
+        publicKey: e2eePublicJwk,
+        algorithm: "ECDH-P256-HKDF-SHA256-AES-256-GCM",
+        version: 1,
+        updatedAt: firebase.database.ServerValue.TIMESTAMP
+      });
+    }
+
+    async function deriveE2EEChatKey(peerPublicJwk) {
+      await ensureE2EEIdentity();
+
+      if (!peerPublicJwk || !e2eePrivateKey) {
+        throw new Error("Recipient encryption key is unavailable.");
+      }
+
+      const peerPublicKey = await crypto.subtle.importKey(
+        "jwk", peerPublicJwk,
+        { name: "ECDH", namedCurve: "P-256" },
+        false, []
+      );
+
+      const sharedBits = await crypto.subtle.deriveBits(
+        { name: "ECDH", public: peerPublicKey },
+        e2eePrivateKey,
+        256
+      );
+
+      const baseKey = await crypto.subtle.importKey(
+        "raw", sharedBits, "HKDF", false, ["deriveKey"]
+      );
+
+      return crypto.subtle.deriveKey(
+        { name: "HKDF", hash: "SHA-256", salt: E2EE_SALT, info: E2EE_INFO },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    async function encryptPrivateMessage(plainText, recipientUsername) {
+      const recipientRecord = e2eePublicKeys[usernameKey(recipientUsername)];
+      const recipientPublicJwk = recipientRecord?.publicKey;
+
+      if (!recipientPublicJwk) {
+        throw new Error("Recipient encryption key is unavailable. Ask them to refresh HACKRONIX once.");
+      }
+
+      const key = await deriveE2EEChatKey(recipientPublicJwk);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encoded = new TextEncoder().encode(plainText);
+      const ciphertext = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        encoded
+      );
+
+      return {
+        ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+        iv: bytesToBase64(iv),
+        senderPublicKey: e2eePublicJwk,
+        encryption: "E2EE-v1-AES-256-GCM"
+      };
+    }
+
+    async function decryptPrivateMessage(message) {
+      if (!message?.encrypted || !message.ciphertext || !message.iv) {
+        return message;
+      }
+
+      try {
+        const key = await deriveE2EEChatKey(message.senderPublicKey);
+        const plaintext = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: base64ToBytes(message.iv) },
+          key,
+          base64ToBytes(message.ciphertext)
+        );
+
+        return {
+          ...message,
+          text: new TextDecoder().decode(plaintext),
+          decryptionFailed: false
+        };
+      } catch (error) {
+        console.error("E2EE decrypt failed:", error);
+        return {
+          ...message,
+          text: "🔒 Unable to decrypt this message on this device.",
+          decryptionFailed: true
+        };
+      }
+    }
+
+    /* =========================
        INIT
     ========================== */
 
@@ -2875,8 +2983,11 @@
         // Restore instantly. Network/Firebase must never block the UI.
         enterApp();
 
+        // Prepare this browser's E2EE identity before publishing the username.
+        ensureE2EEIdentity().catch(error => console.error("E2EE init failed:", error));
+
         // Reclaim this exact browser session in the background.
-        claimUsername(currentUser, true).then(claimed => {
+        claimUsername(currentUser, true).then(async claimed => {
           if (!claimed) {
             currentUser = "";
             userProfile = {};
@@ -2891,6 +3002,8 @@
             return;
           }
 
+          await ensureE2EEIdentity();
+          await publishE2EEPublicKey();
           initializeFirebaseListeners();
         }).catch(error => {
           console.error(error);
@@ -3267,6 +3380,10 @@
         }
       });
 
+      database.ref("userKeys").on("value", snapshot => {
+        e2eePublicKeys = snapshot.val() || {};
+      });
+
       database.ref("messages").on("value", snapshot => {
         const messages = snapshot.val() || {};
 
@@ -3358,6 +3475,15 @@
 
       currentUser = username;
 
+      try {
+        await ensureE2EEIdentity();
+      } catch (error) {
+        console.error("E2EE initialization failed:", error);
+        currentUser = "";
+        showToast("Secure chat could not initialize on this browser.", true);
+        return;
+      }
+
       const claimed = await claimUsername(currentUser);
 
       if (!claimed) {
@@ -3372,6 +3498,13 @@
       }));
 
       enterApp();
+      try {
+        await publishE2EEPublicKey();
+      } catch (error) {
+        console.error("E2EE public-key publish failed:", error);
+        showToast("Secure key setup failed. Please try again.", true);
+        return;
+      }
       initializeFirebaseListeners();
 
       showToast(`Welcome, ${currentUser} ✓`);
@@ -3797,7 +3930,7 @@
         : "var(--muted)";
     }
 
-    function displayMessages(username) {
+    async function displayMessages(username) {
       const container = document.getElementById("chat-messages");
       if (!container) return;
 
@@ -3809,7 +3942,7 @@
       `;
 
       const chatId = getChatId(currentUser, username);
-      const messages = [...(chats[chatId] || [])];
+      let messages = [...(chats[chatId] || [])];
       const pending = Object.values(pendingFileMessages[chatId] || {});
 
       if (pending.length) {
@@ -3830,7 +3963,15 @@
           </div>
         `);
       } else {
-        messages.forEach(message => {
+        await ensureE2EEIdentity();
+        const decryptedMessages = await Promise.all(
+          messages.map(message => decryptPrivateMessage(message))
+        );
+
+        // User may have switched chats while decryption was running.
+        if (currentChatUser !== username || isCommunityChat) return;
+
+        decryptedMessages.forEach(message => {
           addMessageToUI(
             message.text || "",
             message.sender === currentUser ? "sent" : "received",
@@ -3845,7 +3986,7 @@
       }
     }
 
-    function sendMessage() {
+    async function sendMessage() {
       const input = document.getElementById("message-input");
       const msg = input.value.trim();
 
@@ -3861,26 +4002,41 @@
       if (!currentChatUser) return;
 
       const messageId = generateMessageId();
+      const originalMessage = msg;
 
-      const messageData = {
-        id: messageId,
-        sender: currentUser,
-        receiver: currentChatUser,
-        text: msg,
-        timestamp: firebase.database.ServerValue.TIMESTAMP
-      };
+      try {
+        await ensureE2EEIdentity();
+        const encrypted = await encryptPrivateMessage(msg, currentChatUser);
 
-      input.value = "";
-      input.focus();
+        const messageData = {
+          id: messageId,
+          sender: currentUser,
+          receiver: currentChatUser,
+          timestamp: firebase.database.ServerValue.TIMESTAMP,
+          encrypted: true,
+          encryption: encrypted.encryption,
+          ciphertext: encrypted.ciphertext,
+          iv: encrypted.iv,
+          senderPublicKey: encrypted.senderPublicKey
+        };
 
-      const pushRef = database.ref("messages").push();
-      messageSent[messageId] = true;
+        input.value = "";
+        input.focus();
 
-      pushRef.set(messageData).catch(error => {
-        console.error("Message send failed:", error);
-        input.value = msg;
-        showToast("Message could not be sent. Try again.", true);
-      });
+        const pushRef = database.ref("messages").push();
+        messageSent[messageId] = true;
+        await pushRef.set(messageData);
+      } catch (error) {
+        console.error("Secure message send failed:", error);
+        input.value = originalMessage;
+        input.focus();
+        showToast(
+          error?.message?.includes("Recipient encryption key")
+            ? "Recipient is not ready for secure chat. Ask them to refresh once."
+            : "Secure message could not be sent. Try again.",
+          true
+        );
+      }
     }
 
     function addMessageToUI(text, type, timestamp, messageData) {
@@ -3904,12 +4060,8 @@
       if (messageData && messageData.isFile) {
         const fileName = escapeHTML(messageData.fileName || "File");
         const fileSize = escapeHTML(formatFileSize(messageData.fileSize || 0));
-        const fileUrl = messageData.fileUrl || "";
+        const fileUrl = messageData.fileUrl || messageData.fileData || "";
         const safeUrl = escapeHTML(fileUrl);
-        const isReady = !!fileUrl && !messageData.uploading;
-        const status = messageData.uploading
-          ? "Sending file…"
-          : (messageData.failed ? "Upload failed" : "Ready to download");
 
         msg.classList.add("file-message");
 
@@ -3921,9 +4073,8 @@
               <div class="file-meta">
                 <div class="file-name">${fileName}</div>
                 <div class="file-size">${fileSize}</div>
-                <div class="file-status">${status}</div>
               </div>
-              <button class="file-download" ${isReady ? "" : "disabled"}
+              <button class="file-download"
                 onclick="downloadFile('${escapeJS(fileUrl)}', '${escapeJS(messageData.fileName || "download")}')"
                 title="Download">↓</button>
             </div>
@@ -3936,9 +4087,8 @@
               <div class="file-meta">
                 <div class="file-name">${fileName}</div>
                 <div class="file-size">${fileSize}</div>
-                <div class="file-status">${status}</div>
               </div>
-              <button class="file-download" ${isReady ? "" : "disabled"}
+              <button class="file-download"
                 onclick="downloadFile('${escapeJS(fileUrl)}', '${escapeJS(messageData.fileName || "download")}')"
                 title="Download">↓</button>
             </div>
@@ -3989,119 +4139,94 @@
       const chatId = getChatId(currentUser, currentChatUser);
       const tempFileId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const localUrl = URL.createObjectURL(file);
-      const pushRef = database.ref("messages").push();
-      const messageId = pushRef.key;
 
-      // Put the message in RTDB FIRST. This makes the file card reach the
-      // receiver immediately instead of waiting for Storage upload to finish.
-      const baseMessage = {
-        id: messageId,
+      /*
+       * Optimistic UI:
+       * The file card appears immediately on the sender's screen. Firebase
+       * Storage upload continues in the background. Only the final download
+       * URL + metadata is written to Realtime Database, so the old giant
+       * base64 message can never be created.
+       */
+      const pendingMessage = {
+        id: tempFileId,
+        tempFileId,
         sender: currentUser,
         receiver: currentChatUser,
         text: "",
-        timestamp: firebase.database.ServerValue.TIMESTAMP,
+        timestamp: Date.now(),
         isFile: true,
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type || "application/octet-stream",
-        fileUrl: "",
-        uploading: true,
-        tempFileId
+        fileUrl: localUrl,
+        pending: true
       };
 
       if (!pendingFileMessages[chatId]) pendingFileMessages[chatId] = {};
-      pendingFileMessages[chatId][tempFileId] = {
-        ...baseMessage,
-        timestamp: Date.now(),
-        fileUrl: localUrl
-      };
+      pendingFileMessages[chatId][tempFileId] = pendingMessage;
 
-      // Sender sees it immediately. Receiver gets the RTDB placeholder too.
+      // Draw it immediately. No "Uploading..." banner.
       displayMessages(currentChatUser);
       event.target.value = "";
 
       try {
-        await pushRef.set(baseMessage);
-
         const safeName = file.name
           .replace(/[^a-zA-Z0-9._-]/g, "_")
           .slice(-120);
 
         const storagePath = `chatFiles/${chatId}/${Date.now()}_${safeName}`;
         const storageRef = storage.ref(storagePath);
-        const uploadTask = storageRef.put(file, {
+
+        const snapshot = await storageRef.put(file, {
           contentType: file.type || "application/octet-stream",
           cacheControl: "public,max-age=31536000"
         });
 
-        uploadTask.on(
-          "state_changed",
-          snapshot => {
-            // Keep the UI compact; no giant upload banner.
-            const pct = snapshot.totalBytes
-              ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)
-              : 0;
-            const pendingItem = pendingFileMessages[chatId]?.[tempFileId];
-            if (pendingItem) pendingItem.uploadProgress = pct;
-          },
-          async error => {
-            console.error("File upload failed:", error);
-            await pushRef.update({
-              uploading: false,
-              failed: true,
-              errorCode: error?.code || "storage/error"
-            }).catch(() => {});
+        const fileUrl = await snapshot.ref.getDownloadURL();
 
-            delete pendingFileMessages[chatId]?.[tempFileId];
-            URL.revokeObjectURL(localUrl);
-            displayMessages(currentChatUser);
-            showToast(
-              error?.code === "storage/unauthorized" || error?.code === "storage/unauthenticated"
-                ? "Firebase Storage permission denied."
-                : "File upload failed. Try again.",
-              true
-            );
-          },
-          async () => {
-            try {
-              const fileUrl = await uploadTask.snapshot.ref.getDownloadURL();
+        const messageData = {
+          sender: currentUser,
+          receiver: currentChatUser,
+          text: "",
+          timestamp: firebase.database.ServerValue.TIMESTAMP,
+          isFile: true,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type || "application/octet-stream",
+          fileUrl,
+          storagePath
+        };
 
-              // Replace only the temporary state. The same RTDB message remains,
-              // so the receiver does not get a duplicate file message.
-              await pushRef.update({
-                fileUrl,
-                storagePath,
-                uploading: false,
-                failed: false
-              });
+        await database.ref("messages").push(messageData);
 
-              delete pendingFileMessages[chatId]?.[tempFileId];
-              if (!Object.keys(pendingFileMessages[chatId] || {}).length) {
-                delete pendingFileMessages[chatId];
-              }
+        delete pendingFileMessages[chatId][tempFileId];
+        if (!Object.keys(pendingFileMessages[chatId]).length) {
+          delete pendingFileMessages[chatId];
+        }
 
-              URL.revokeObjectURL(localUrl);
-              displayMessages(currentChatUser);
-              showToast("File sent ✓");
-            } catch (error) {
-              console.error("File URL update failed:", error);
-              await pushRef.update({
-                uploading: false,
-                failed: true
-              }).catch(() => {});
-              delete pendingFileMessages[chatId]?.[tempFileId];
-              URL.revokeObjectURL(localUrl);
-              displayMessages(currentChatUser);
-              showToast("File uploaded but could not be shared.", true);
-            }
-          }
-        );
-      } catch (error) {
-        console.error("File message creation failed:", error);
-        delete pendingFileMessages[chatId]?.[tempFileId];
         URL.revokeObjectURL(localUrl);
         displayMessages(currentChatUser);
-        showToast("File could not be sent. Try again.", true);
+        showToast("File sent ✓");
+      } catch (error) {
+        console.error("File upload failed:", error);
+
+        delete pendingFileMessages[chatId][tempFileId];
+        if (!Object.keys(pendingFileMessages[chatId]).length) {
+          delete pendingFileMessages[chatId];
+        }
+
+        URL.revokeObjectURL(localUrl);
+        displayMessages(currentChatUser);
+
+        if (
+          error &&
+          (error.code === "storage/unauthorized" ||
+           error.code === "storage/unauthenticated")
+        ) {
+          showToast("Firebase Storage permission denied.", true);
+        } else {
+          showToast("File could not be sent. Try again.", true);
+        }
       }
     }
 
@@ -4117,24 +4242,32 @@
       ) + " " + sizes[i];
     }
 
-    function downloadFile(fileData, fileName) {
+    async function downloadFile(fileData, fileName) {
       if (!fileData) {
-        showToast("File is still uploading.", true);
+        showToast("File link is unavailable.", true);
         return;
       }
 
-      // Firebase Storage download URLs are cross-origin. A fetch()+blob()
-      // download can fail because of browser CORS rules, so open the signed
-      // Firebase URL directly. The browser can then preview/download it.
-      const link = document.createElement("a");
-      link.href = fileData;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.download = fileName || "download";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      try {
+        const response = await fetch(fileData);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = fileName || "downloaded_file";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      } catch (error) {
+        console.error("Download failed:", error);
+        /* Fallback: open Firebase Storage URL directly. */
+        window.open(fileData, "_blank", "noopener");
+      }
     }
+
 
     function showToast(message, error = false) {
       const toast = document.getElementById("toast");
