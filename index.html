@@ -7,9 +7,9 @@
   <title>HACKRONIX Chat</title>
 
   <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-storage-compat.js"></script>
-
+  
   <style>
     :root {
       --bg: #050807;
@@ -2610,20 +2610,6 @@
 
           <div class="chat-composer">
             <div class="composer">
-              <button
-                class="composer-btn"
-                onclick="document.getElementById('file-upload').click()"
-                title="Attach file"
-              >⌕</button>
-
-              <input
-                type="file"
-                id="file-upload"
-                class="hidden"
-                accept="image/*,.pdf,.doc,.docx,.txt,.jpg,.png,.mp3,.wav"
-                onchange="handleFileUpload(event)"
-              />
-
               <input
                 type="text"
                 id="message-input"
@@ -2636,7 +2622,6 @@
               <button class="send-btn" onclick="sendMessage()" title="Send">➤</button>
             </div>
 
-            <div class="file-preview" id="file-info"></div>
           </div>
         </div>
       </main>
@@ -2756,8 +2741,32 @@
     };
 
     firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
     const database = firebase.database();
-    const storage = firebase.storage();
+
+    /*
+     * Firebase Authentication is intentionally anonymous.
+     * Users still enter only a username; no email/password/login UI is added.
+     * The anonymous Firebase UID is used only to protect Firebase resources.
+     */
+    let firebaseAuthReadyPromise = null;
+
+    async function ensureFirebaseAuth() {
+      if (auth.currentUser) return auth.currentUser;
+
+      if (!firebaseAuthReadyPromise) {
+        firebaseAuthReadyPromise = auth
+          .setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+          .then(() => auth.signInAnonymously())
+          .then(result => result.user)
+          .catch(error => {
+            firebaseAuthReadyPromise = null;
+            throw error;
+          });
+      }
+
+      return firebaseAuthReadyPromise;
+    }
 
     /* =========================
        STATE
@@ -2866,6 +2875,7 @@
       await database.ref("userKeys/" + usernameKey(currentUser)).set({
         username: currentUser,
         publicKey: e2eePublicJwk,
+        uid: auth.currentUser?.uid || "",
         algorithm: "ECDH-P256-HKDF-SHA256-AES-256-GCM",
         version: 1,
         updatedAt: firebase.database.ServerValue.TIMESTAMP
@@ -2980,14 +2990,19 @@
         currentUser = savedUsername;
         userProfile = userData.profile || {};
 
-        // Restore instantly. Network/Firebase must never block the UI.
-        enterApp();
+        // Firebase must authenticate this browser before any protected
+        // Realtime Database / Storage operation is attempted.
+        ensureFirebaseAuth()
+          .then(async () => {
+            enterApp();
 
-        // Prepare this browser's E2EE identity before publishing the username.
-        ensureE2EEIdentity().catch(error => console.error("E2EE init failed:", error));
+            // Prepare this browser's E2EE identity before publishing the username.
+            await ensureE2EEIdentity();
 
-        // Reclaim this exact browser session in the background.
-        claimUsername(currentUser, true).then(async claimed => {
+            // Reclaim this exact browser session in the background.
+            return claimUsername(currentUser, true);
+          })
+          .then(async claimed => {
           if (!claimed) {
             currentUser = "";
             userProfile = {};
@@ -3289,7 +3304,8 @@
               normalizedName: normalizeUsername(username),
               timestamp: firebase.database.ServerValue.TIMESTAMP,
               profile: userProfile,
-              sessionId
+              sessionId,
+              uid: auth.currentUser?.uid || ""
             };
           }
 
@@ -3301,7 +3317,8 @@
               normalizedName: normalizeUsername(username),
               timestamp: firebase.database.ServerValue.TIMESTAMP,
               profile: userProfile,
-              sessionId
+              sessionId,
+              uid: auth.currentUser?.uid || current?.uid || ""
             };
           }
 
@@ -3362,7 +3379,8 @@
         normalizedName: normalizeUsername(currentUser),
         timestamp: firebase.database.ServerValue.TIMESTAMP,
         profile: userProfile,
-        sessionId: getSessionId()
+        sessionId: getSessionId(),
+        uid: auth.currentUser?.uid || ""
       });
 
       userRef.onDisconnect().remove();
@@ -3476,11 +3494,12 @@
       currentUser = username;
 
       try {
+        await ensureFirebaseAuth();
         await ensureE2EEIdentity();
       } catch (error) {
-        console.error("E2EE initialization failed:", error);
+        console.error("Secure initialization failed:", error);
         currentUser = "";
-        showToast("Secure chat could not initialize on this browser.", true);
+        showToast("Secure connection could not initialize. Check your internet and try again.", true);
         return;
       }
 
@@ -3537,8 +3556,14 @@
         });
 
         updates["activeUsers/" + usernameKey(username)] = null;
+        updates["userKeys/" + usernameKey(username)] = null;
 
         await database.ref().update(updates);
+
+        // End the anonymous Firebase session. The next login silently
+        // creates/reuses an anonymous Firebase account again.
+        await auth.signOut();
+        firebaseAuthReadyPromise = null;
 
         localStorage.removeItem("hackronix-user");
 
@@ -3870,6 +3895,7 @@
 
       database.ref("communityMessages").push({
         sender: currentUser,
+        senderUid: auth.currentUser?.uid || "",
         text,
         timestamp: firebase.database.ServerValue.TIMESTAMP
       });
@@ -4012,6 +4038,8 @@
           id: messageId,
           sender: currentUser,
           receiver: currentChatUser,
+          senderUid: auth.currentUser?.uid || "",
+          receiverUid: e2eePublicKeys[usernameKey(currentChatUser)]?.uid || "",
           timestamp: firebase.database.ServerValue.TIMESTAMP,
           encrypted: true,
           encryption: encrypted.encryption,
@@ -4122,112 +4150,6 @@
 
     function isValidImageURL(text) {
       return /\.(jpeg|jpg|gif|png|webp)$/i.test(text);
-    }
-
-    /* =========================
-       FILES
-    ========================== */
-
-    async function handleFileUpload(event) {
-      const file = event.target.files[0];
-
-      if (!file || !currentChatUser) {
-        event.target.value = "";
-        return;
-      }
-
-      const chatId = getChatId(currentUser, currentChatUser);
-      const tempFileId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const localUrl = URL.createObjectURL(file);
-
-      /*
-       * Optimistic UI:
-       * The file card appears immediately on the sender's screen. Firebase
-       * Storage upload continues in the background. Only the final download
-       * URL + metadata is written to Realtime Database, so the old giant
-       * base64 message can never be created.
-       */
-      const pendingMessage = {
-        id: tempFileId,
-        tempFileId,
-        sender: currentUser,
-        receiver: currentChatUser,
-        text: "",
-        timestamp: Date.now(),
-        isFile: true,
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type || "application/octet-stream",
-        fileUrl: localUrl,
-        pending: true
-      };
-
-      if (!pendingFileMessages[chatId]) pendingFileMessages[chatId] = {};
-      pendingFileMessages[chatId][tempFileId] = pendingMessage;
-
-      // Draw it immediately. No "Uploading..." banner.
-      displayMessages(currentChatUser);
-      event.target.value = "";
-
-      try {
-        const safeName = file.name
-          .replace(/[^a-zA-Z0-9._-]/g, "_")
-          .slice(-120);
-
-        const storagePath = `chatFiles/${chatId}/${Date.now()}_${safeName}`;
-        const storageRef = storage.ref(storagePath);
-
-        const snapshot = await storageRef.put(file, {
-          contentType: file.type || "application/octet-stream",
-          cacheControl: "public,max-age=31536000"
-        });
-
-        const fileUrl = await snapshot.ref.getDownloadURL();
-
-        const messageData = {
-          sender: currentUser,
-          receiver: currentChatUser,
-          text: "",
-          timestamp: firebase.database.ServerValue.TIMESTAMP,
-          isFile: true,
-          fileName: file.name,
-          fileSize: file.size,
-          fileType: file.type || "application/octet-stream",
-          fileUrl,
-          storagePath
-        };
-
-        await database.ref("messages").push(messageData);
-
-        delete pendingFileMessages[chatId][tempFileId];
-        if (!Object.keys(pendingFileMessages[chatId]).length) {
-          delete pendingFileMessages[chatId];
-        }
-
-        URL.revokeObjectURL(localUrl);
-        displayMessages(currentChatUser);
-        showToast("File sent ✓");
-      } catch (error) {
-        console.error("File upload failed:", error);
-
-        delete pendingFileMessages[chatId][tempFileId];
-        if (!Object.keys(pendingFileMessages[chatId]).length) {
-          delete pendingFileMessages[chatId];
-        }
-
-        URL.revokeObjectURL(localUrl);
-        displayMessages(currentChatUser);
-
-        if (
-          error &&
-          (error.code === "storage/unauthorized" ||
-           error.code === "storage/unauthenticated")
-        ) {
-          showToast("Firebase Storage permission denied.", true);
-        } else {
-          showToast("File could not be sent. Try again.", true);
-        }
-      }
     }
 
     function formatFileSize(bytes) {
@@ -4863,8 +4785,8 @@
       voiceCallInitialized = true;
 
       /*
-       * One listener for all calls. This matches the current username-only
-       * session model and does not require Firebase Authentication.
+       * One listener for all calls. The UI remains username-only,
+       * while Firebase Authentication protects the signaling data.
        */
       voiceCallCallListener = snapshot => {
         if (!currentUser) return;
@@ -4957,6 +4879,8 @@
         await callRef.set({
           caller: currentUser,
           callee: currentChatUser,
+          callerUid: auth.currentUser?.uid || "",
+          calleeUid: e2eePublicKeys[usernameKey(currentChatUser)]?.uid || "",
           status: "ringing",
           offer: {
             type: pc.localDescription.type,
