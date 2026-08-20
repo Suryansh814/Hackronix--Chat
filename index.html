@@ -2297,7 +2297,11 @@
       }
     }
 
-  </style>
+      .page-search-hidden {
+      display: none !important;
+    }
+
+</style>
 
   <script>
     (function () {
@@ -2792,6 +2796,10 @@
     let isCommunityChat = false;
     let communityMessages = {};
     let pendingFileMessages = {};
+    // Keep unsent text isolated per conversation so a draft can never leak
+    // into another person's chat when the user switches quickly.
+    let chatDrafts = {};
+    let communityDraft = "";
 
     /* =========================
        E2EE
@@ -3180,6 +3188,17 @@
       updateAllCurrentUserUI();
     }
 
+    function updateTopbarSearchVisibility() {
+      const searchBox = document.querySelector("#users-screen .topbar .search-box");
+      if (!searchBox) return;
+
+      const shouldShow =
+        document.getElementById("users-screen")?.classList.contains("active") &&
+        currentViewMode === "active";
+
+      searchBox.classList.toggle("page-search-hidden", !shouldShow);
+    }
+
     function showScreen(id) {
       closeMobileNav();
 
@@ -3189,6 +3208,7 @@
 
       const target = document.getElementById(id);
       if (target) target.classList.add("active");
+      updateTopbarSearchVisibility();
     }
 
 
@@ -3367,37 +3387,77 @@
       }, 50);
     }
 
-    function showUsers() {
+    function saveCurrentDraft() {
+      const input = document.getElementById("message-input");
+      if (!input) return;
+
+      if (isCommunityChat) {
+        communityDraft = input.value;
+      } else if (currentChatUser) {
+        chatDrafts[getChatId(currentUser, currentChatUser)] = input.value;
+      }
+    }
+
+    function restoreDraftForCurrentChat() {
+      const input = document.getElementById("message-input");
+      if (!input) return;
+
+      input.value = isCommunityChat
+        ? communityDraft
+        : (currentChatUser
+            ? (chatDrafts[getChatId(currentUser, currentChatUser)] || "")
+            : "");
+    }
+
+    function setAppHistoryState(screen, extra = {}, mode = "push") {
+      const state = { hackronix: true, screen, ...extra };
+      if (mode === "replace") {
+        history.replaceState(state, "", location.href);
+      } else {
+        history.pushState(state, "", location.href);
+      }
+    }
+
+    function showUsers(fromHistory = false) {
+      saveCurrentDraft();
       currentViewMode = "active";
-      showScreen("users-screen");
       currentChatUser = null;
       isCommunityChat = false;
+      showScreen("users-screen");
       updateUsersPageHeader();
       renderUsers(allUsersCache);
+      if (!fromHistory) setAppHistoryState("users");
     }
 
     function showAllChats() {
+      saveCurrentDraft();
       currentViewMode = "all";
-      showScreen("users-screen");
       currentChatUser = null;
       isCommunityChat = false;
+      showScreen("users-screen");
       updateUsersPageHeader();
       renderUsers(allUsersCache);
+      setAppHistoryState("users");
     }
 
     function showFavorites() {
+      saveCurrentDraft();
       currentViewMode = "favorites";
-      showScreen("users-screen");
       currentChatUser = null;
       isCommunityChat = false;
+      showScreen("users-screen");
       updateUsersPageHeader();
       renderUsers(allUsersCache);
+      setAppHistoryState("users");
     }
 
-    function openCommunity() {
+    function openCommunity(fromHistory = false) {
+      saveCurrentDraft();
       isCommunityChat = true;
       currentChatUser = null;
       showScreen("chat-screen");
+      if (!fromHistory) setAppHistoryState("community");
+      restoreDraftForCurrentChat();
 
       document.getElementById("chat-username").textContent = "HACKRONIX Community";
       document.getElementById("chat-user-status").textContent = "● Live community room";
@@ -3543,40 +3603,57 @@
         e2eePublicKeys = snapshot.val() || {};
       });
 
-      database.ref("messages").on("value", snapshot => {
-        const messages = snapshot.val() || {};
+      const messagesRef = database.ref("messages");
 
-        chats = {};
+      function upsertRealtimeMessage(key, message) {
+        if (!message || !message.sender || !message.receiver) return;
 
-        Object.keys(messages).forEach(key => {
-          const message = messages[key];
+        const chatId = getChatId(message.sender, message.receiver);
+        if (!chats[chatId]) chats[chatId] = [];
 
-          if (!message || !message.sender || !message.receiver) return;
-
-          const chatId = getChatId(message.sender, message.receiver);
-
-          if (!chats[chatId]) chats[chatId] = [];
-
-          chats[chatId].push({
-            ...message,
-            id: message.id || key
-          });
-        });
-
-        Object.keys(chats).forEach(chatId => {
-          chats[chatId].sort((a, b) => {
-            const ta = typeof a.timestamp === "number" ? a.timestamp : 0;
-            const tb = typeof b.timestamp === "number" ? b.timestamp : 0;
-            return ta - tb;
-          });
+        const normalizedMessage = { ...message, id: message.id || key };
+        chats[chatId] = chats[chatId].filter(existing => existing.id !== normalizedMessage.id);
+        chats[chatId].push(normalizedMessage);
+        chats[chatId].sort((a, b) => {
+          const ta = typeof a.timestamp === "number" ? a.timestamp : 0;
+          const tb = typeof b.timestamp === "number" ? b.timestamp : 0;
+          return ta - tb;
         });
 
         rebuildNotifications();
 
         if (currentChatUser && !isCommunityChat) {
-          displayMessages(currentChatUser);
+          const currentChatId = getChatId(currentUser, currentChatUser);
+          if (currentChatId === chatId) displayMessages(currentChatUser);
         }
 
+        scheduleUserRender(allUsersCache);
+      }
+
+      // Incremental listeners avoid re-downloading and re-rendering the entire
+      // messages collection for every new message. This is much faster on phone
+      // and keeps cross-device delivery responsive as the database grows.
+      messagesRef.on("child_added", snapshot => {
+        upsertRealtimeMessage(snapshot.key, snapshot.val());
+      });
+
+      messagesRef.on("child_changed", snapshot => {
+        upsertRealtimeMessage(snapshot.key, snapshot.val());
+      });
+
+      messagesRef.on("child_removed", snapshot => {
+        const message = snapshot.val();
+        if (!message || !message.sender || !message.receiver) return;
+
+        const chatId = getChatId(message.sender, message.receiver);
+        if (chats[chatId]) {
+          const id = message.id || snapshot.key;
+          chats[chatId] = chats[chatId].filter(existing => existing.id !== id);
+          if (!chats[chatId].length) delete chats[chatId];
+        }
+
+        rebuildNotifications();
+        if (currentChatUser && !isCommunityChat) displayMessages(currentChatUser);
         scheduleUserRender(allUsersCache);
       });
 
@@ -3701,6 +3778,8 @@
       allUsersCache = {};
       favoriteUsers = loadFavorites();
       isCommunityChat = false;
+      chatDrafts = {};
+      communityDraft = "";
 
       localStorage.removeItem("hackronix-user");
 
@@ -4101,11 +4180,15 @@
       return `${currentUser}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
     }
 
-    function startChat(username) {
+    function startChat(username, fromHistory = false) {
+      // Snapshot the old conversation draft before changing the active chat.
+      saveCurrentDraft();
       currentChatUser = username;
       isCommunityChat = false;
 
       showScreen("chat-screen");
+      if (!fromHistory) setAppHistoryState("chat", { username });
+      restoreDraftForCurrentChat();
 
       document.getElementById("chat-username").textContent = username;
 
@@ -4197,6 +4280,7 @@
       if (!msg) return;
 
       if (isCommunityChat) {
+        communityDraft = "";
         sendCommunityMessage(msg);
         input.value = "";
         input.focus();
@@ -4205,19 +4289,24 @@
 
       if (!currentChatUser) return;
 
+      // Freeze the destination before any async crypto/Firebase work starts.
+      // Without this, switching chats during await could send or clear a draft
+      // in the wrong conversation.
+      const targetUser = currentChatUser;
+      const targetChatId = getChatId(currentUser, targetUser);
       const messageId = generateMessageId();
       const originalMessage = msg;
 
       try {
         await ensureE2EEIdentity();
-        const encrypted = await encryptPrivateMessage(msg, currentChatUser);
+        const encrypted = await encryptPrivateMessage(msg, targetUser);
 
         const messageData = {
           id: messageId,
           sender: currentUser,
-          receiver: currentChatUser,
+          receiver: targetUser,
           senderUid: auth.currentUser?.uid || "",
-          receiverUid: e2eePublicKeys[usernameKey(currentChatUser)]?.uid || "",
+          receiverUid: e2eePublicKeys[usernameKey(targetUser)]?.uid || "",
           timestamp: firebase.database.ServerValue.TIMESTAMP,
           encrypted: true,
           encryption: encrypted.encryption,
@@ -4227,16 +4316,22 @@
           recipientPublicKey: encrypted.recipientPublicKey
         };
 
-        input.value = "";
-        input.focus();
+        chatDrafts[targetChatId] = "";
+        if (currentChatUser === targetUser && !isCommunityChat) {
+          input.value = "";
+          input.focus();
+        }
 
         const pushRef = database.ref("messages").push();
         messageSent[messageId] = true;
         await pushRef.set(messageData);
       } catch (error) {
         console.error("Secure message send failed:", error);
-        input.value = originalMessage;
-        input.focus();
+        chatDrafts[targetChatId] = originalMessage;
+        if (currentChatUser === targetUser && !isCommunityChat) {
+          input.value = originalMessage;
+          input.focus();
+        }
         showToast(
           error?.message?.includes("Recipient encryption key")
             ? "Recipient is not ready for secure chat. Ask them to refresh once."
@@ -4389,8 +4484,10 @@
        PROFILE
     ========================== */
 
-    function openProfile() {
+    function openProfile(fromHistory = false) {
+      saveCurrentDraft();
       showScreen("profile-screen");
+      if (!fromHistory) setAppHistoryState("profile");
       updateAllCurrentUserUI();
     }
 
@@ -4450,12 +4547,17 @@
     }
 
     function backToUsers() {
-      showScreen("users-screen");
-      currentChatUser = null;
-      isCommunityChat = false;
-      currentViewMode = "active";
-      updateUsersPageHeader();
-      renderUsers(allUsersCache);
+      saveCurrentDraft();
+
+      // For in-app pages, use browser history so Android's system Back button
+      // and the visible Back button follow the same route instead of exiting.
+      if (history.state?.hackronix && history.state.screen !== "users") {
+        history.back();
+        return;
+      }
+
+      showUsers(true);
+      setAppHistoryState("users", {}, "replace");
     }
 
     /* =========================
@@ -4614,6 +4716,45 @@
         container.dataset.userScrolled = distance > 140 ? "true" : "false";
       }, { passive: true });
     })();
+
+    /* =========================
+       APP HISTORY + CHAT DRAFT ISOLATION
+    ========================== */
+
+    window.addEventListener("popstate", event => {
+      const state = event.state;
+
+      // A browser Back from any HACKRONIX sub-page returns to the app instead
+      // of behaving like a site exit.
+      if (!state?.hackronix) {
+        showUsers(true);
+        setAppHistoryState("users", {}, "replace");
+        return;
+      }
+
+      if (state.screen === "chat" && state.username) {
+        startChat(state.username, true);
+      } else if (state.screen === "community") {
+        openCommunity(true);
+      } else if (state.screen === "profile") {
+        openProfile(true);
+      } else {
+        showUsers(true);
+      }
+    });
+
+    document.getElementById("message-input").addEventListener("input", function () {
+      if (isCommunityChat) {
+        communityDraft = this.value;
+      } else if (currentChatUser) {
+        chatDrafts[getChatId(currentUser, currentChatUser)] = this.value;
+      }
+    });
+
+    // Mark the initial page as an in-app route once the document is ready.
+    if (!history.state?.hackronix) {
+      setAppHistoryState("users", {}, "replace");
+    }
 
     /* =========================
        KEYBOARD / CLEANUP
