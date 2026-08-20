@@ -2801,6 +2801,14 @@
     let chatDrafts = {};
     let communityDraft = "";
 
+    // Temporary messages: automatically expire after 1 hour.
+    // The UI also refuses to render expired messages, so old data never
+    // reappears while Firebase cleanup is catching up.
+    const MESSAGE_TTL_MS = 60 * 60 * 1000;
+    const MESSAGE_CLEANUP_INTERVAL_MS = 60 * 1000;
+    let messageCleanupInterval = null;
+    let messageCleanupRunning = false;
+
     /* =========================
        E2EE
        Private 1-to-1 messages use Web Crypto (ECDH P-256 + HKDF + AES-GCM).
@@ -3570,6 +3578,73 @@
       });
     }
 
+    function getMessageExpiry(message) {
+      if (!message) return 0;
+      if (typeof message.expiresAt === "number") return message.expiresAt;
+      if (typeof message.timestamp === "number") return message.timestamp + MESSAGE_TTL_MS;
+      return 0;
+    }
+
+    function isMessageExpired(message) {
+      const expiresAt = getMessageExpiry(message);
+      return expiresAt > 0 && Date.now() >= expiresAt;
+    }
+
+    async function cleanupExpiredMessages() {
+      if (!currentUser || messageCleanupRunning) return;
+      messageCleanupRunning = true;
+
+      try {
+        const [privateSnapshot, communitySnapshot] = await Promise.all([
+          database.ref("messages").once("value"),
+          database.ref("communityMessages").once("value")
+        ]);
+
+        const updates = {};
+        const uid = auth.currentUser?.uid || "";
+        const privateMessages = privateSnapshot.val() || {};
+        const community = communitySnapshot.val() || {};
+
+        Object.entries(privateMessages).forEach(([key, message]) => {
+          if (!isMessageExpired(message)) return;
+          if (message.sender === currentUser || message.receiver === currentUser ||
+              (uid && (message.senderUid === uid || message.receiverUid === uid))) {
+            updates[`messages/${key}`] = null;
+          }
+        });
+
+        // Community messages can be removed by their sender under the current
+        // security rules. If the sender is offline, another active client can
+        // still hide the expired message until the sender next connects.
+        Object.entries(community).forEach(([key, message]) => {
+          if (!isMessageExpired(message)) return;
+          if (message.sender === currentUser || (uid && message.senderUid === uid)) {
+            updates[`communityMessages/${key}`] = null;
+          }
+        });
+
+        if (Object.keys(updates).length) {
+          await database.ref().update(updates);
+        }
+      } catch (error) {
+        console.warn("Expired message cleanup failed:", error);
+      } finally {
+        messageCleanupRunning = false;
+      }
+    }
+
+    function startAutoMessageCleanup() {
+      if (messageCleanupInterval) clearInterval(messageCleanupInterval);
+      cleanupExpiredMessages();
+      messageCleanupInterval = setInterval(cleanupExpiredMessages, MESSAGE_CLEANUP_INTERVAL_MS);
+    }
+
+    function stopAutoMessageCleanup() {
+      if (messageCleanupInterval) clearInterval(messageCleanupInterval);
+      messageCleanupInterval = null;
+      messageCleanupRunning = false;
+    }
+
     function initializeFirebaseListeners() {
       if (!currentUser) return;
 
@@ -3586,6 +3661,7 @@
 
       userRef.onDisconnect().remove();
       initializeConnectionMonitor();
+      startAutoMessageCleanup();
 
       database.ref("activeUsers").on("value", snapshot => {
         const users = snapshot.val() || {};
@@ -3634,11 +3710,21 @@
       // messages collection for every new message. This is much faster on phone
       // and keeps cross-device delivery responsive as the database grows.
       messagesRef.on("child_added", snapshot => {
-        upsertRealtimeMessage(snapshot.key, snapshot.val());
+        const message = snapshot.val();
+        if (isMessageExpired(message)) {
+          cleanupExpiredMessages();
+          return;
+        }
+        upsertRealtimeMessage(snapshot.key, message);
       });
 
       messagesRef.on("child_changed", snapshot => {
-        upsertRealtimeMessage(snapshot.key, snapshot.val());
+        const message = snapshot.val();
+        if (isMessageExpired(message)) {
+          cleanupExpiredMessages();
+          return;
+        }
+        upsertRealtimeMessage(snapshot.key, message);
       });
 
       messagesRef.on("child_removed", snapshot => {
@@ -3658,7 +3744,14 @@
       });
 
       database.ref("communityMessages").on("value", snapshot => {
-        communityMessages = snapshot.val() || {};
+        const allCommunityMessages = snapshot.val() || {};
+        communityMessages = Object.fromEntries(
+          Object.entries(allCommunityMessages).filter(([, message]) => !isMessageExpired(message))
+        );
+
+        if (Object.keys(allCommunityMessages).length !== Object.keys(communityMessages).length) {
+          cleanupExpiredMessages();
+        }
 
         if (isCommunityChat) {
           displayCommunityMessages();
@@ -3762,6 +3855,9 @@
         database.ref(".info/connected").off();
       } catch (_) {}
 
+      // Stop the temporary-message cleanup timer for this session.
+      stopAutoMessageCleanup();
+
       // Clear the visible session immediately. Do NOT wait for Firebase.
       currentUser = "";
       currentChatUser = null;
@@ -3803,48 +3899,11 @@
         ["userKeys/" + usernamePath]: null
       }).catch(() => {});
 
-      // Firebase message cleanup continues in the background. The user does
-      // not wait for a full messages scan before seeing the login screen.
-      (async () => {
-        try {
-          const snapshot = await database.ref("messages").once("value");
-          const messages = snapshot.val() || {};
-          const updates = {};
-
-          Object.keys(messages).forEach(key => {
-            const message = messages[key];
-            if (
-              message &&
-              (message.sender === username || message.receiver === username)
-            ) {
-              updates["messages/" + key] = null;
-            }
-          });
-
-          updates["activeUsers/" + usernamePath] = null;
-          updates["userKeys/" + usernamePath] = null;
-
-          // If the same username has already logged back in, do not delete
-          // messages that may have been created by the new session.
-          const activeUsername = currentUser;
-          if (activeUsername && normalizeUsername(activeUsername) === normalizeUsername(username)) {
-            return;
-          }
-
-          if (Object.keys(updates).length) {
-            await database.ref().update(updates);
-          }
-        } catch (error) {
-          // Logout already completed locally. Cleanup failure should not trap
-          // the user on the chat screen.
-          console.warn("Background logout cleanup failed:", error);
-        }
-
-        try {
-          await auth.signOut();
-        } catch (_) {}
-        firebaseAuthReadyPromise = null;
-      })();
+      // Messages are intentionally NOT deleted on logout. Each message now has
+      // its own 1-hour expiry and is cleaned automatically, independent of
+      // whether the user logs out.
+      auth.signOut().catch(() => {});
+      firebaseAuthReadyPromise = null;
     }
 
     /* =========================
@@ -4150,11 +4209,13 @@
     function sendCommunityMessage(text) {
       if (!text || !currentUser) return;
 
+      const createdAt = Date.now();
       database.ref("communityMessages").push({
         sender: currentUser,
         senderUid: auth.currentUser?.uid || "",
         text,
-        timestamp: firebase.database.ServerValue.TIMESTAMP
+        timestamp: firebase.database.ServerValue.TIMESTAMP,
+        expiresAt: createdAt + MESSAGE_TTL_MS
       });
     }
 
@@ -4229,8 +4290,8 @@
       `;
 
       const chatId = getChatId(currentUser, username);
-      let messages = [...(chats[chatId] || [])];
-      const pending = Object.values(pendingFileMessages[chatId] || {});
+      let messages = [...(chats[chatId] || [])].filter(message => !isMessageExpired(message));
+      const pending = Object.values(pendingFileMessages[chatId] || {}).filter(message => !isMessageExpired(message));
 
       if (pending.length) {
         messages.push(...pending);
@@ -4301,6 +4362,7 @@
         await ensureE2EEIdentity();
         const encrypted = await encryptPrivateMessage(msg, targetUser);
 
+        const createdAt = Date.now();
         const messageData = {
           id: messageId,
           sender: currentUser,
@@ -4308,6 +4370,7 @@
           senderUid: auth.currentUser?.uid || "",
           receiverUid: e2eePublicKeys[usernameKey(targetUser)]?.uid || "",
           timestamp: firebase.database.ServerValue.TIMESTAMP,
+          expiresAt: createdAt + MESSAGE_TTL_MS,
           encrypted: true,
           encryption: encrypted.encryption,
           ciphertext: encrypted.ciphertext,
