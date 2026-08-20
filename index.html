@@ -2801,10 +2801,10 @@
     let chatDrafts = {};
     let communityDraft = "";
 
-    // Temporary messages: automatically expire after 1 hour.
+    // Temporary messages: automatically expire after 15 minutes.
     // The UI also refuses to render expired messages, so old data never
     // reappears while Firebase cleanup is catching up.
-    const MESSAGE_TTL_MS = 60 * 60 * 1000;
+    const MESSAGE_TTL_MS = 15 * 60 * 1000;
     const MESSAGE_CLEANUP_INTERVAL_MS = 60 * 1000;
     let messageCleanupInterval = null;
     let messageCleanupRunning = false;
@@ -2823,7 +2823,7 @@
     let e2eePublicKeys = {};
     let e2eeKeyring = {};
 
-    // v2 keeps a separate E2EE identity for every username on this browser.
+    // v2 keeps a separate E2EE identity for every Firebase session/UID on this browser.
     // The old v1 key is migrated instead of being discarded, so existing
     // messages are not unnecessarily broken.
     const E2EE_KEY_STORAGE = "hackronix-e2ee-keypairs-v2";
@@ -2848,7 +2848,11 @@
     }
 
     function e2eeUsernameId(username) {
-      return normalizeUsername(username || "");
+      // A username is only a display name. The Firebase UID is the real identity.
+      // This prevents a later user who reuses the same username from inheriting
+      // the previous user's local encryption identity.
+      const uid = auth?.currentUser?.uid || "";
+      return uid ? `uid:${uid}` : normalizeUsername(username || "");
     }
 
     function loadE2EEKeyring() {
@@ -3684,7 +3688,16 @@
       function upsertRealtimeMessage(key, message) {
         if (!message || !message.sender || !message.receiver) return;
 
-        const chatId = getChatId(message.sender, message.receiver);
+        const myUid = auth.currentUser?.uid || "";
+        // UID is the real participant identity. Never place a message in the
+        // local chat cache merely because a reused username matches.
+        if (!myUid || (message.senderUid !== myUid && message.receiverUid !== myUid)) {
+          return;
+        }
+
+        if (!message.senderUid || !message.receiverUid) return;
+
+        const chatId = getChatIdFromUids(message.senderUid, message.receiverUid);
         if (!chats[chatId]) chats[chatId] = [];
 
         const normalizedMessage = { ...message, id: message.id || key };
@@ -3731,7 +3744,11 @@
         const message = snapshot.val();
         if (!message || !message.sender || !message.receiver) return;
 
-        const chatId = getChatId(message.sender, message.receiver);
+        const myUid = auth.currentUser?.uid || "";
+        if (!myUid || (message.senderUid !== myUid && message.receiverUid !== myUid)) return;
+        if (!message.senderUid || !message.receiverUid) return;
+
+        const chatId = getChatIdFromUids(message.senderUid, message.receiverUid);
         if (chats[chatId]) {
           const id = message.id || snapshot.key;
           chats[chatId] = chats[chatId].filter(existing => existing.id !== id);
@@ -3763,10 +3780,13 @@
       const next = {};
 
       Object.values(chats).flat().forEach(message => {
+        const myUid = auth.currentUser?.uid || "";
+        const activePeerUid = currentChatUser ? getUidForUsername(currentChatUser) : "";
         if (
-          message.receiver === currentUser &&
-          message.sender !== currentUser &&
-          message.sender !== currentChatUser
+          myUid &&
+          message.receiverUid === myUid &&
+          message.senderUid !== myUid &&
+          message.senderUid !== activePeerUid
         ) {
           const senderKey = normalizeUsername(message.sender);
           next[senderKey] = (next[senderKey] || 0) + 1;
@@ -3892,16 +3912,37 @@
 
       showToast("Logged out ✓");
 
-      // Release the username/key immediately. This request is intentionally
-      // fire-and-forget so the login screen never waits for Firebase.
-      database.ref().update({
-        ["activeUsers/" + usernamePath]: null,
-        ["userKeys/" + usernamePath]: null
-      }).catch(() => {});
+      const logoutUid = auth.currentUser?.uid || "";
 
-      // Messages are intentionally NOT deleted on logout. Each message now has
-      // its own 1-hour expiry and is cleaned automatically, independent of
-      // whether the user logs out.
+      // Remove this exact session's local encryption identity. If the same
+      // username is chosen later, it gets a completely new keypair.
+      try {
+        const ring = loadE2EEKeyring();
+        if (logoutUid) delete ring[`uid:${logoutUid}`];
+        // Remove old username-scoped key too so legacy browser data cannot be
+        // inherited by a different person reusing the same username.
+        delete ring[normalizeUsername(username)];
+        localStorage.setItem(E2EE_KEY_STORAGE, JSON.stringify(ring));
+      } catch (_) {}
+      sessionStorage.removeItem("hackronix-session-id");
+
+      // Release username and public key only when this exact UID still owns them.
+      // A delayed logout request must never delete a newly-created session that
+      // reused the same username.
+      if (logoutUid) {
+        database.ref("activeUsers/" + usernamePath).transaction(current => {
+          if (current?.uid === logoutUid) return null;
+          return current;
+        }).catch(() => {});
+
+        database.ref("userKeys/" + usernamePath).transaction(current => {
+          if (current?.uid === logoutUid) return null;
+          return current;
+        }).catch(() => {});
+      }
+
+      // Messages stay until their 1-hour expiry, but a future user with the
+      // same username has a different UID and cannot be placed in this chat.
       auth.signOut().catch(() => {});
       firebaseAuthReadyPromise = null;
     }
@@ -4233,8 +4274,25 @@
       return normalizeUsername(username).replace(/[.#$[\]/]/g, "_");
     }
 
+    function getUidForUsername(username) {
+      const normalized = usernameKey(username);
+      if (normalizeUsername(username) === normalizeUsername(currentUser)) {
+        return auth.currentUser?.uid || "";
+      }
+      return allUsersCache[normalized]?.uid ||
+        e2eePublicKeys[normalized]?.uid || "";
+    }
+
     function getChatId(user1, user2) {
-      return [user1, user2].sort().join("-");
+      // Accept usernames for existing UI calls, but build the real chat identity
+      // from immutable Firebase UIDs whenever available.
+      const a = getUidForUsername(user1) || String(user1 || "");
+      const b = getUidForUsername(user2) || String(user2 || "");
+      return [a, b].sort().join("-");
+    }
+
+    function getChatIdFromUids(uid1, uid2) {
+      return [String(uid1 || ""), String(uid2 || "")].sort().join("-");
     }
 
     function generateMessageId() {
@@ -4289,8 +4347,14 @@
         <div class="date-chip">LIVE CONVERSATION</div>
       `;
 
-      const chatId = getChatId(currentUser, username);
-      let messages = [...(chats[chatId] || [])].filter(message => !isMessageExpired(message));
+      const peerUid = getUidForUsername(username);
+      const myUid = auth.currentUser?.uid || "";
+      const chatId = (myUid && peerUid)
+        ? getChatIdFromUids(myUid, peerUid)
+        : "";
+      let messages = chatId
+        ? [...(chats[chatId] || [])].filter(message => !isMessageExpired(message))
+        : [];
       const pending = Object.values(pendingFileMessages[chatId] || {}).filter(message => !isMessageExpired(message));
 
       if (pending.length) {
@@ -4354,7 +4418,15 @@
       // Without this, switching chats during await could send or clear a draft
       // in the wrong conversation.
       const targetUser = currentChatUser;
-      const targetChatId = getChatId(currentUser, targetUser);
+      const senderUid = auth.currentUser?.uid || "";
+      const receiverUid = getUidForUsername(targetUser);
+
+      if (!senderUid || !receiverUid) {
+        showToast("User session is not ready yet. Please try again.", true);
+        return;
+      }
+
+      const targetChatId = getChatIdFromUids(senderUid, receiverUid);
       const messageId = generateMessageId();
       const originalMessage = msg;
 
@@ -4367,8 +4439,9 @@
           id: messageId,
           sender: currentUser,
           receiver: targetUser,
-          senderUid: auth.currentUser?.uid || "",
-          receiverUid: e2eePublicKeys[usernameKey(targetUser)]?.uid || "",
+          senderUid,
+          receiverUid,
+          conversationId: targetChatId,
           timestamp: firebase.database.ServerValue.TIMESTAMP,
           expiresAt: createdAt + MESSAGE_TTL_MS,
           encrypted: true,
